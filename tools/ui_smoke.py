@@ -126,8 +126,8 @@ function fake:CreateCheckbox(text, isSel, onSel) items[text] = onSel end
 function fake:CreateTitle() end
 function fake:CreateDivider() end
 B.buildFilter(fake)
-assert(items["Other shards"] and items["All levels"] and items["Compact rows"] and items["Shard"], "filter menu items")
-items["Other shards"]() assert(OpenGroupDB.where == "other" and B.filtersActive(), "Where from the menu")
+assert(items["Other chat numbers"] and items["All levels"] and items["Compact rows"] and items["Chat number"], "filter menu items")
+items["Other chat numbers"]() assert(OpenGroupDB.where == "other" and B.filtersActive(), "Where from the menu")
 items["All levels"]() assert(OpenGroupDB.allLevels == false, "All levels toggles")
 B.resetFilters() assert(OpenGroupDB.where == "all" and not B.filtersActive(), "reset clears filters")
 OpenGroupDB.allLevels = true
@@ -336,6 +336,10 @@ local N = OpenGroup_Nearby
 local Pr = OpenGroup_Proto
 OpenGroup.listings, OpenGroup.nearby, OpenGroup.remote = {}, {}, {}
 OpenGroup.peers["Rep R"] = { shard = 56, level = 60, seen = CLOCK }
+-- the Group Finder path is off (the game's list is shared); with the flag on it still works
+for _, m in ipairs(Pr.finderDigest(56, 1, { { leader = "Ignored I", act = 30, size = 3, need = 4, age = 20 } })) do OpenGroup.receive(m, "Rep R") end
+assert(OpenGroup.remote["Ignored I"] == nil, "Group Finder digests are ignored while sharing is off")
+N.SHARE_FINDER = true
 local dg = Pr.finderDigest(56, 1, { { leader = "Far Away", act = 30, size = 3, need = 4, age = 20 }, { leader = "Other Group", act = 31, size = 2, need = 6, age = 5 } })
 local dropped0 = OpenGroup.stats.dropped or 0
 for _, m in ipairs(dg) do OpenGroup.receive(m, "Rep R") end
@@ -358,7 +362,7 @@ local ov0 = N.stats.overlapSeen
 for _, m in ipairs(Pr.finderDigest(56, 9, { { leader = "Seen Here", act = 30, size = 2, need = 4, age = 1 }, { leader = "Far Away", act = 30, size = 4, need = 4, age = 1 } })) do OpenGroup.receive(m, "Rep R") end
 assert(OpenGroup.remote["Seen Here"] == nil and N.stats.overlapSeen == ov0 + 1, "local results win, overlap counted")
 print("overlap by shard:", N.overlapText())
-assert(N.overlapText() == "shard 56 50% (2 groups)", "overlap per shard, from the latest digest")
+assert(N.overlapText() == "Chat 56 50% (2 groups)", "overlap per shard, from the latest digest")
 OpenGroup.nearby["Seen Here"] = nil
 -- our own shard's digest is ignored; 5 minutes on, the rest expire
 for _, m in ipairs(Pr.finderDigest(47, 3, { { leader = "Home Group", act = 30, size = 2, need = 4, age = 1 } })) do OpenGroup.receive(m, "Rep R") end
@@ -410,6 +414,7 @@ OpenGroupDB.shareChat = false
 assert(N.report() == false and N.stats.chatShared == s0 + 1, "the setting turns it off")
 OpenGroupDB.shareChat = nil
 print("other shards' LFG chat ok")
+N.SHARE_FINDER = false
 print("other shards' Group Finder ok")
 -- pinging yourself sends nothing
 OpenGroup.pings = {}
@@ -447,5 +452,107 @@ OpenGroup.notePerson(c.name, "Player-1-ABC")
 print("whisper person:", OpenGroup.personLine("Mia M"))
 assert(OpenGroup.personLine("Mia M") == "Level 52 MAGE" or OpenGroup.personLine("Mia M") == "Level 52 Mage", "class and level")
 OpenGroup_UI.whisper("Mia M")
+-- Find players: a spot opens the page with the classes that fill it; one /who per Search click
+local F = OpenGroup_UI.find
+local Pr2 = OpenGroup_Proto
+WHO, SEARCHES = 0, 0
+local lastWho
+C_FriendList.SendWho = function(q) WHO = WHO + 1 lastWho = q end
+C_LFGList.Search = function() SEARCHES = SEARCHES + 1 end
+OpenGroup.scan.inFlight = nil
+F.open(Pr2.spot(1))
+print("find query:", F.query(), "classes:", #F.classes)
+assert(OpenGroupDB.tab == "find" and #F.classes == 2 and F.classes[1] == "WARRIOR" and F.classes[2] == "DRUID", "a Horde tank spot: Warrior and Druid")
+assert(F.query():match('^c%-"Warrior" %d+%-%d+$'), "query: class and levels")
+assert(F.msg:GetText():find("tank"), "message names the role")
+local q1 = F.query()
+F.searchClick()
+assert(WHO == 1 and SEARCHES == 0 and lastWho == q1, "one /who per Search click, no Group Finder search")
+assert(F.query():match('^c%-"Druid"'), "the next click takes the next class")
+F.searchClick()
+assert(WHO == 1, "no second /who while one is running")
+-- 120 matches, 50 shown: me, an ignored player and an OpenGroup player are skipped
+C_FriendList.GetNumWhoResults = function() return 50, 120 end
+C_FriendList.GetWhoInfo = function(i)
+  local name = i == 1 and "Ann A" or ("Who " .. i)
+  return { fullName = name, level = 56, classStr = "Warrior", filename = "WARRIOR", area = "Felwood", fullGuildName = "" }
+end
+C_FriendList.IsIgnored = function(n) return n == "Who 2" end
+OpenGroup.peers["Who 3"] = { shard = 47, level = 56, seen = CLOCK }
+OpenGroup.scan.onWhoList()
+print("find results:", #F.results, F.total, F.notice:GetText())
+assert(#F.results == 50 and F.total == 120 and F.notice:GetText():find("50 shown"), "the 50 cap is called out")
+assert(F.nextTarget().fullName == "Who 4", "whisper next skips you, ignored and OpenGroup players")
+local told, typed
+ChatFrame_SendTell = function(n) told = n end
+ChatEdit_GetActiveWindow = function() return { Insert = function(_, t) typed = t end } end
+F.whisper(F.nextTarget())
+assert(told == "Who 4" and typed == F.msg:GetText(), "the chat box opens on them with the message")
+assert(F.asked["Who 4"] == nil and F.nextTarget().fullName == "Who 4", "not asked until the whisper goes out")
+OpenGroup.whisperEvent(nil, "CHAT_MSG_WHISPER_INFORM", typed, "Who 4")
+assert(F.asked["Who 4"] and F.nextTarget().fullName == "Who 5", "asked once it went out; next moves on")
+date = date or function() return "12:00" end
+local frow = CreateFrame("Button") frow.built = false
+INITS[#INITS](frow, F.results[4])
+print("find row badge:", frow.badge:GetText())
+ChatFrame_SendTell = nil ChatEdit_GetActiveWindow = nil
+-- one LFG chat reporter per chat number: Trade 56 is another number, so it gets the digest
+local Nb = OpenGroup_Nearby
+OpenGroup.nearby = {}
+OpenGroup.nearby["Near Two"] = { leader = "Near Two", src = "chat", size = 1, need = 1, acts = {}, got = CLOCK, level = 0, shard = 47, title = "LFM strat", note = "" }
+OpenGroup.nearby["GF Two"] = { leader = "GF Two", src = "finder", size = 3, need = 6, acts = {30}, got = CLOCK, level = 0, shard = 47 }
+for n in pairs(OpenGroup.peers) do OpenGroup.peers[n] = nil end
+OpenGroup.peers["Mate M"] = { shard = 47, level = 60, seen = CLOCK }
+Nb.resultsAt = GetTime() Nb.claims = {}
+local h0, c0 = Nb.stats.harvested, Nb.stats.chatShared
+assert(Nb.report() == false, "nobody on another number: nothing to report")
+OpenGroup.peers["Other O"] = { shard = 56, level = 60, seen = CLOCK }
+assert(Nb.report() == true and Nb.stats.chatShared == c0 + 1, "chat goes to another number")
+assert(Nb.stats.harvested == h0, "no Group Finder digest")
+OpenGroup.receive(Pr2.reporting(3), "Other O")
+assert(Nb.claims["Other O"] == nil, "a reporter on another number doesn't make us stand by")
+OpenGroup.receive(Pr2.reporting(3), "Mate M")
+assert(Nb.claims["Mate M"], "one on our number does")
+OpenGroupDB.shareChat = nil
+assert(Nb.shareChat() == Nb.SHARE_CHAT_DEFAULT, "chat sharing default is one flag")
+print("find players ok")
+-- queued for several: search finds the second one, a filter files it there, no filter lists it under all
+local Ac = OpenGroup_Activities
+Ac.info[50] = { id = 50, name = "Upper Blackrock Spire", short = "UBRS", min = 55, max = 60, cat = 2 }
+Ac.info[51] = { id = 51, name = "Scholomance", short = "Scholomance", min = 58, max = 60, cat = 2 }
+OpenGroup.listings = {} OpenGroup.remote = {}
+OpenGroup.nearby = { ["Multi M"] = { leader = "Multi M", src = "finder", seq = 0, shard = 47, level = 60, size = 1, hops = 0, class = "MAGE", need = 4, cat = 2, acts = {50, 51, 31}, price = 0, quest = 0, title = "", note = "", got = CLOCK } }
+OpenGroupDB.groupBy = "act" OpenGroupDB.allLevels = true OpenGroupDB.where = "all"
+local B2 = OpenGroup_UI.browse
+B2.search = "scholo" SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+local heads, hits = {}, 0
+for _, d in ipairs(PROVIDED) do if d.header then heads[#heads + 1] = d.text end if d.l and d.l.leader == "Multi M" then hits = hits + 1 end end
+print("search scholo:", hits, table.concat(heads, " | "))
+assert(hits == 1 and heads[1]:find("Scholomance"), "search 'scholo' finds the second activity and files it there")
+B2.search = "ubrs" SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+hits = 0 for _, d in ipairs(PROVIDED) do if d.l and d.l.leader == "Multi M" then hits = hits + 1 end end
+assert(hits == 1, "aliases: ubrs")
+B2.search = ""
+local wantSch = function(id) return id == 51 end
+local rr = OpenGroup.rowOf(OpenGroup.nearby["Multi M"], 47, wantSch)
+local g1 = OpenGroup.groupRows({ rr }, "act")
+assert(#g1 == 1 and g1[1].text == "Scholomance" and g1[1].rows[1].act == 51, "filter Scholomance: under Scholomance, not UBRS")
+local g3 = OpenGroup.groupRows({ OpenGroup.rowOf(OpenGroup.nearby["Multi M"], 47) }, "act")
+print("unfiltered groups:", #g3)
+assert(#g3 == 3, "unfiltered: under all three")
+-- the other activities travel in other servers' Group Finder digests, and old senders still parse
+local Pd = OpenGroup_Proto
+local dm = Pd.finderDigest(56, 3, { { leader = "Multi M", act = 50, more = { 51, 31 }, size = 1, need = 4, age = 2 } })
+local kd, dd = Pd.parse(dm[1])
+assert(kd == "F1" and dd.items[1].act == 50 and dd.items[1].more[1] == 51 and dd.items[1].more[2] == 31, "digest carries the other activities")
+local kd2, dd2 = Pd.parse("F1;56;3;1;1;Old O/50/1/4/2")
+assert(kd2 == "F1" and #dd2.items[1].more == 0, "older digests still parse")
+OpenGroup.nearby = {}
+OpenGroup_Nearby.SHARE_FINDER = true
+OpenGroup.receive(dm[1], "Rep R")
+OpenGroup_Nearby.SHARE_FINDER = false
+local rm = OpenGroup.remote["Multi M"]
+assert(rm and #rm.acts == 3 and rm.acts[2] == 51, "other-server rows keep every activity")
+print("multi-activity ok")
 print("smoke OK")
 ''')

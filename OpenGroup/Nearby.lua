@@ -447,10 +447,18 @@ function N.overlapText()
 	table.sort(list, function(a, b) return a.shard < b.shard end)
 	local out = {}
 	for _, e in ipairs(list) do
-		out[#out + 1] = ("shard %d %d%% (%d %s)"):format(e.shard, e.o.total > 0 and math.floor(100 * e.o.seen / e.o.total + 0.5) or 0, e.o.total, e.o.total == 1 and "group" or "groups")
+		out[#out + 1] = ("" .. L.CHAN .. " %d %d%% (%d %s)"):format(e.shard, e.o.total > 0 and math.floor(100 * e.o.seen / e.o.total + 0.5) or 0, e.o.total, e.o.total == 1 and "group" or "groups")
 	end
 	return table.concat(out, ", ")
 end
+-- The game's Group Finder turned out to be shared by every chat number (players on 47, 55, 56 and
+-- 86 all see the same groups), so passing it on adds nothing: off. Only the chat channels
+-- (LookingForGroup, Trade, General) differ per number, and those are what OpenGroup bridges.
+-- The Group Finder path stays behind this flag in case a number ever turns out different; while
+-- it's off, digests from older versions are ignored (their groups are in everyone's own list).
+N.SHARE_FINDER = false
+-- "Share LFG chat from my chat number": the default when the player hasn't set it
+N.SHARE_CHAT_DEFAULT = true
 local REPORT_EVERY, CLAIM_KEEP, REMOTE_KEEP, MAX_TARGETS = 90, 150, 300, 8
 local CHAT_SHARE_KEEP = 600   -- a passed-on chat post, this long
 N.stats.chatShared, N.stats.chatBy = 0, {}
@@ -458,7 +466,11 @@ local digestSeq = 0
 local chatPartial = {}
 
 -- "Share LFG chat from my shard": on unless turned off
-function N.shareChat() return not (type(OpenGroupDB) == "table" and OpenGroupDB.shareChat == false) end
+function N.shareChat()
+	local v = type(OpenGroupDB) == "table" and OpenGroupDB.shareChat
+	if v == nil then return N.SHARE_CHAT_DEFAULT end
+	return v == true
+end
 
 -- our shard's recent LookingForGroup posts worth passing on: newest first, not OpenGroup users
 function N.chatItems()
@@ -483,7 +495,7 @@ function N.digestItems()
 	local items, t = {}, clock()
 	for name, l in pairs(L.nearby) do
 		if l.src == "finder" and t - (l.got or 0) < FINDER_KEEP and not L.listings[name] and not L.peers[name] then
-			items[#items + 1] = { leader = name, act = (l.acts or {})[1] or 0, size = l.size or 1, need = l.need or 0, age = math.max(0, t - (l.got or t)), got = l.got or 0 }
+			items[#items + 1] = { leader = name, act = (l.acts or {})[1] or 0, more = { (l.acts or {})[2], (l.acts or {})[3], (l.acts or {})[4] }, size = l.size or 1, need = l.need or 0, age = math.max(0, t - (l.got or t)), got = l.got or 0 }
 		end
 	end
 	table.sort(items, function(a, b) return a.got > b.got end)
@@ -506,12 +518,14 @@ local turn = 0
 function N.report()
 	if not enabled() or not L.shard or L.shard() <= 0 then return false end
 	local fresh = N.resultsAt and GetTime() - N.resultsAt < FINDER_KEEP
-	local items = fresh and N.digestItems() or {}
+	local items = (N.SHARE_FINDER and fresh) and N.digestItems() or {}
 	local posts = N.shareChat() and N.chatItems() or {}
 	if not N.shouldReport(L.me() or "", N.claims, clock(), #items > 0 or #posts > 0) then return false end
 	if #items == 0 and #posts == 0 then return false end
 	local mine, far, near = L.shard(), {}, {}
 	for name, p in pairs(L.live()) do
+		-- one reporter per chat number: players on other numbers get the digest, players on ours
+		-- hear that we report and stand by
 		if (p.shard or 0) > 0 and p.shard ~= mine then far[#far + 1] = name
 		elseif p.shard == mine then near[#near + 1] = name end
 	end
@@ -539,7 +553,16 @@ L.onReporter = function(sender, d)
 	if p and p.shard == L.shard() then N.claims[L.short(sender)] = clock() end
 end
 
+-- a passed-on group's activities: the first, then the others it's queued for
+local function remoteActs(it)
+	local out = {}
+	if (it.act or 0) > 0 then out[1] = it.act end
+	for _, v in ipairs(it.more or {}) do out[#out + 1] = v end
+	return out
+end
+
 L.onFinderDigest = function(sender, d)
+	if not N.SHARE_FINDER then return end
 	if d.shard <= 0 or d.shard == L.shard() then return end   -- our own shard we see ourselves
 	local t = clock()
 	local reporter = L.short(sender)
@@ -556,7 +579,7 @@ L.onFinderDigest = function(sender, d)
 		if not L.isMe(name) and not L.listings[name] and not L.nearby[name] and not (L.ignored and L.ignored(name)) then
 			L.remote[name] = {
 				leader = name, src = "remote", shard = d.shard, reporter = reporter, digest = d.digest,
-				size = it.size, need = it.need, acts = it.act > 0 and { it.act } or {}, cat = catOf({ it.act }),
+				size = it.size, need = it.need, acts = remoteActs(it), cat = catOf({ it.act }),
 				level = 0, got = t - it.age, seq = 0, hops = 0, price = 0, quest = 0, title = "", note = "",
 			}
 			pend.seen[name] = true

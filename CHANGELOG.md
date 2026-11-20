@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.3-test
+
+- Find players: a new tab that runs a /who search for the players you want (class, levels, zone, name) and lists them with their level, class, zone and guild. /who reaches everyone, so it finds people your chat channels don't show you
+- Open it from a spot ("Find players" in the spot editor) or from the listed bar: it picks the classes that fill the spot and the levels for your activity
+- Whisper a player, or click Whisper next to go down the list: each click opens the chat box on them with your message, and you press Enter. People you've whispered, players on your ignore list and OpenGroup players (who see your listing anyway) are skipped. The message is saved
+- When /who stops at 50, it says so and offers to narrow the search to your zone or half the level range
+- The game's Group Finder turned out to be shared by every chat number, so OpenGroup no longer passes it on. Only LookingForGroup chat is passed on between numbers, by one OpenGroup player per number
+- The number after Trade, LookingForGroup and General is now shown as "Chat 47" (it's the same for every global channel). Rows say "Group Finder", "LFG 56" for chat posts from another number, or "OpenGroup, Chat 56"
+- Players queued for several activities: Group by activity lists them under each one, and with an Activity filter or a search only under the matching ones. The Activity column shows the matching one first ("Scholomance +2") and the tooltip lists them all
+- The search box matches every activity a player is queued for, and short names like scholo, strat, ubrs, lbrs, brd, dme, zf, sm, rfd, gnomer
+- Network tab: "Share LFG chat from my chat number" has its own row and no longer runs into the player list
+
 ## v0.6.2-beta
 
 - Groups from the game's Group Finder on other shards: OpenGroup players pass on what their Group Finder shows, so you see groups from other shards too (marked GF, with the shard and who saw them). Groups already in your own Group Finder aren't repeated, and /og status shows per shard how much of their Group Finder matches yours

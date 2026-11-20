@@ -209,3 +209,31 @@ if CreateFrame then
 		if not A.fallback then f:UnregisterAllEvents() end
 	end)
 end
+
+-- --------------------------------------------------------------------------------------------
+-- The short names players type for dungeons, for the search box. Matched against the activity's
+-- (English) full name; each entry adds its words to that activity's searchable text.
+local ALIASES = {
+	{ "Scholomance", "scholo scholomance" }, { "Stratholme", "strat" }, { "Main Gate", "live" }, { "Service Gate", "ud dead" },
+	{ "Upper Blackrock Spire", "ubrs" }, { "Lower Blackrock Spire", "lbrs" }, { "Blackrock Depths", "brd" },
+	{ "Dire Maul", "dm" }, { "Dire Maul (East)", "dme" }, { "Dire Maul (West)", "dmw" }, { "Dire Maul (North)", "dmn tribute" },
+	{ "Sunken Temple", "st" }, { "Atal'Hakkar", "st sunken" }, { "Maraudon", "mara" }, { "Zul'Farrak", "zf" },
+	{ "Scarlet Monastery", "sm" }, { "Graveyard", "gy" }, { "Library", "lib" }, { "Armory", "arm" }, { "Cathedral", "cath" },
+	{ "Razorfen Downs", "rfd" }, { "Razorfen Kraul", "rfk" }, { "Uldaman", "ulda" }, { "Blackfathom", "bfd" },
+	{ "Wailing Caverns", "wc" }, { "Shadowfang", "sfk" }, { "Stockade", "stocks" }, { "Gnomeregan", "gnomer" },
+	{ "Ragefire", "rfc" }, { "Deadmines", "vc" }, { "Blackmaw Hold", "blackmaw" },
+}
+-- "scholo scholomance" for Scholomance, "" for anything without one. Lower case.
+function A.aliases(id)
+	local i = A.get(id)
+	local n = i and i.name or ""
+	local out = {}
+	for _, e in ipairs(ALIASES) do if n:find(e[1], 1, true) then out[#out + 1] = e[2] end end
+	return table.concat(out, " ")
+end
+-- every name a search might use for it: full, short and the aliases, lower case
+function A.searchText(id)
+	local i = A.get(id)
+	if not i then return "" end
+	return (i.name .. " " .. (i.short or "") .. " " .. A.aliases(id)):lower()
+end

@@ -93,7 +93,7 @@ local function split(s)
 	return out
 end
 
-P.VERSION = "0.6.2-beta"
+P.VERSION = "0.6.3-test"
 P.MAX_PX = 10           -- names per peer-exchange message
 
 function P.hello(shard, level) return ("H1;%d;%d;%s"):format(shard or 0, level or 0, clean(P.VERSION, 16)) end
@@ -138,21 +138,37 @@ function P.finderDigest(shard, digest, items)
 		local name = clean(it.leader, P.NAME_LEN):gsub("[,/]", "")
 		local act = int(it.act, 0, 2^31) or 0
 		if name ~= "" then
-			entries[#entries + 1] = ("%s/%d/%d/%d/%d"):format(name, act, int(it.size, 1, 40) or 1, int(it.need, 0, 7) or 0, int(it.age, 0, 86400) or 0)
+			-- the other activities a group is queued for (at most 3) travel in a field of their own
+			-- after the entries, so older versions (which read only the entries) still parse them
+			local more = {}
+			for _, m in ipairs(type(it.more) == "table" and it.more or {}) do
+				local v = int(m, 1, 2^31)
+				if v and #more < 3 then more[#more + 1] = tostring(v) end
+			end
+			entries[#entries + 1] = { e = ("%s/%d/%d/%d/%d"):format(name, act, int(it.size, 1, 40) or 1, int(it.need, 0, 7) or 0, int(it.age, 0, 86400) or 0),
+				more = table.concat(more, ".") }
 		end
 	end
 	local head = ("F1;%d;%d;"):format(int(shard, 0, 99999) or 0, int(digest, 0, 2^31) or 0)
 	local parts, cur = {}, {}
-	local room = P.MAX_LEN - #head - 8   -- the part numbers
+	local room = P.MAX_LEN - #head - 10   -- the part numbers and separators
 	local len = 0
 	for _, e in ipairs(entries) do
-		if #cur > 0 and len + #e + 1 > room then parts[#parts + 1] = cur cur, len = {}, 0 end
+		local cost = #e.e + 1 + (e.more ~= "" and (#e.more + 4) or 0)
+		if #cur > 0 and len + cost > room then parts[#parts + 1] = cur cur, len = {}, 0 end
 		cur[#cur + 1] = e
-		len = len + #e + 1
+		len = len + cost
 	end
 	if #cur > 0 or #parts == 0 then parts[#parts + 1] = cur end
 	local out = {}
-	for i, p in ipairs(parts) do out[i] = head .. i .. ";" .. #parts .. ";" .. table.concat(p, ",") end
+	for i, p in ipairs(parts) do
+		local es, ms = {}, {}
+		for k, e in ipairs(p) do
+			es[k] = e.e
+			if e.more ~= "" then ms[#ms + 1] = k .. ":" .. e.more end
+		end
+		out[i] = head .. i .. ";" .. #parts .. ";" .. table.concat(es, ",") .. (#ms > 0 and (";" .. table.concat(ms, ",")) or "")
+	end
 	return out
 end
 -- LFG chat digests: items = { { leader, age, act, need, size, text } }, at most P.MAX_CHAT
@@ -378,7 +394,18 @@ function P.parse(msg)
 			name = clean(name, P.NAME_LEN)
 			act, size, need, age = int(act, 0, 2^31), int(size, 1, 40), int(need, 0, 7), int(age, 0, 86400)
 			if name ~= "" and act and size and need and age and #items < P.MAX_DIGEST then
-				items[#items + 1] = { leader = name, act = act, size = size, need = need, age = age }
+				items[#items + 1] = { leader = name, act = act, size = size, need = need, age = age, more = {} }
+			end
+		end
+		-- 0.6.3: the other activities, "index:act.act,..." (absent from older senders)
+		for e in (f[7] or ""):gmatch("[^,]+") do
+			local k, list = e:match("^(%d+):([%d%.]+)$")
+			local it = k and items[tonumber(k)]
+			if it then
+				for v in list:gmatch("%d+") do
+					v = int(v, 1, 2^31)
+					if v and #it.more < 3 then it.more[#it.more + 1] = v end
+				end
 			end
 		end
 		return kind, { shard = shard, digest = digest, part = part, parts = parts, items = items }

@@ -9,6 +9,9 @@ L.ICON = "Interface\\AddOns\\OpenGroup\\Media\\icon"
 L.ICON_SQUARE = "Interface\\AddOns\\OpenGroup\\Media\\icon-square"
 
 L.VERSION = P.VERSION
+-- The word shown before the channel number ("Chat 47"). The number is the one the game puts after
+-- every global channel (Trade, LookingForGroup, General), so it isn't named after one of them.
+L.CHAN = "Chat"
 L.peers = {}        -- [name] = { shard, level, seen }   OpenGroup users we can whisper (saved)
 L.listings = {}     -- [leader] = { leader, seq, shard, level, size, title, note, hops, got, age, via }
 L.mine = nil        -- our own listing while we're listed
@@ -368,7 +371,7 @@ function L.receive(msg, sender)
 	elseif kind == "Q1" then
 		local p = L.pings[d.token]
 		if p then
-			L.print(("ping to %s came back from shard %d in %.1fs: hidden whispers reach them."):format(
+			L.print(("ping to %s came back from " .. L.CHAN .. " %d in %.1fs: hidden whispers reach them."):format(
 				L.short(sender), d.shard, GetTime() - p.at))
 			L.pings[d.token] = nil
 		end
@@ -499,7 +502,7 @@ function L.post(title, note, need, cat, acts, price, quest, spots)
 	if L.onListed then L.onListed(first) end
 	L.announce()
 	if first then
-		L.print(("listed \"%s\" to %d OpenGroup users (shard %d)."):format(L.titleOf(L.mine), math.min(ANNOUNCE_PEERS, L.count(L.peers)), L.shard()))
+		L.print(("listed \"%s\" to %d OpenGroup users (" .. L.CHAN .. " %d)."):format(L.titleOf(L.mine), math.min(ANNOUNCE_PEERS, L.count(L.peers)), L.shard()))
 	end
 	if L.onChange then L.onChange() end
 	return true
@@ -743,7 +746,9 @@ end)
 local function hasBit(bits, b) return (bits or 0) % (b * 2) >= b end
 
 -- where: "other" (OpenGroup, another shard), "mine" (OpenGroup, your shard), "finder", "chat"
-function L.rowOf(l, myShard)
+-- prefer(id): an optional test for the activity to show it under (the one the player filtered or
+-- searched for), when a listing has several
+function L.rowOf(l, myShard, prefer)
 	local A, Q = OpenGroup_Activities, OpenGroup_Quests
 	local r = { l = l, leader = l.leader or "?", class = l.class, level = l.level or 0, size = l.size or 1,
 		need = l.need or 0, spots = l.spots, note = l.note or "", got = l.got or 0, shard = l.shard or 0, cat = l.cat or 0 }
@@ -752,16 +757,24 @@ function L.rowOf(l, myShard)
 	r.remote = l.src == "remote" or l.src == "remotechat"
 	r.gf, r.chatPost = l.src == "remote", l.src == "remotechat"
 	r.kind = l.cat == P.SUMMON_CAT and "summon" or P.isBGQ(l.cat) and "bgq" or (r.size > 1 and "group" or "player")
-	-- the activity: the first one we know names it; the level range covers all of them
-	local min, max
+	-- the activity: the one the player is looking for, else the first one we know; the level range
+	-- covers all of them. actNames: every activity's name, for the search box
+	local min, max, names, picked = nil, nil, {}, nil
 	for _, id in ipairs(l.acts or {}) do
 		local i = A and A.get and A.get(id)
 		if i then
 			r.act = r.act or id
+			if not picked and prefer and prefer(id) then picked = id end
+			names[#names + 1] = A.searchText and A.searchText(id) or (i.name or "")
+			r.acts = r.acts or {}
+			r.acts[#r.acts + 1] = id
+			if prefer and prefer(id) then r.wanted = r.wanted or {} r.wanted[#r.wanted + 1] = id end
 			if (i.min or 0) > 0 then min = math.min(min or i.min, i.min) end
 			if (i.max or 0) > 0 then max = math.max(max or i.max, i.max) end
 		end
 	end
+	if picked then r.act = picked end
+	r.actNames = table.concat(names, " ")
 	if (l.quest or 0) > 0 then
 		local ql = Q and Q.level and Q.level(l.quest)
 		if ql then min, max = ql, ql end
@@ -866,12 +879,32 @@ end
 function L.groupRows(rows, by)
 	if by ~= "act" and by ~= "shard" then return nil end
 	local groups, index = {}, {}
-	for _, r in ipairs(rows) do
+	local A = OpenGroup_Activities
+	local expanded = rows
+	if by == "act" then
+		expanded = {}
+		for _, r in ipairs(rows) do
+			local ids = r.wanted or r.acts
+			if r.kind ~= "summon" and r.kind ~= "bgq" and ids and (#ids > 1 or (r.wanted and #(r.acts or {}) > 1)) then
+				for _, id in ipairs(ids) do
+					local c = {}
+					for k, v in pairs(r) do c[k] = v end
+					local i = A and A.get(id)
+					c.act, c.groupKey, c.groupName = id, "a" .. id, (A and A.name(id)) or r.groupName
+					if i and (i.min or 0) > 0 then c.min, c.max = i.min, i.max end
+					expanded[#expanded + 1] = c
+				end
+			else
+				expanded[#expanded + 1] = r
+			end
+		end
+	end
+	for _, r in ipairs(expanded) do
 		local key, text
 		if by == "act" then key, text = r.groupKey, r.groupName
 		else
 			key = r.where == "other" and ("s" .. r.shard) or r.where
-			text = r.where == "other" and ("Shard " .. r.shard) or r.where == "mine" and "Your shard" or r.where == "finder" and "Group Finder" or "LFG chat"
+			text = r.where == "other" and (L.CHAN .. " " .. r.shard) or r.where == "mine" and "Your chat number" or r.where == "finder" and "Group Finder" or "LFG chat"
 		end
 		local g = index[key]
 		if not g then
@@ -1099,16 +1132,19 @@ if CreateFrame then
 	local wf = CreateFrame("Frame")
 	wf:RegisterEvent("CHAT_MSG_WHISPER")
 	wf:RegisterEvent("CHAT_MSG_WHISPER_INFORM")
-	wf:SetScript("OnEvent", function(_, ev, text, who, ...)
+	L.whisperEvent = function(_, ev, text, who, ...)
 		local guid = select(10, ...)
 		local ok = pcall(function()
 			local out = ev == "CHAT_MSG_WHISPER_INFORM"
 			local viewing = L.whisperViewing and readable(who) and type(who) == "string" and L.short(who) == L.whisperViewing
 			local c = L.addWhisper(text, who, out, time(), viewing)
 			if c then L.notePerson(c.name, guid) end
+			-- a whisper that went out: Find players marks that person as asked
+			if c and out and L.onWhisperSent then pcall(L.onWhisperSent, c.name) end
 		end)
 		if ok and L.onWhisper then pcall(L.onWhisper) end
-	end)
+	end
+	wf:SetScript("OnEvent", L.whisperEvent)
 end
 
 -- --------------------------------------------------------------------------------------------
@@ -1251,4 +1287,40 @@ if CreateFrame then
 		end
 		members, leaderNow = n, leader
 	end)
+end
+
+-- --------------------------------------------------------------------------------------------
+-- Find players: the /who search for an open spot. Pure, for tests.
+
+-- the classes that can fill a role (P.TANK / HEALER / DAMAGE; 0 = any) on a faction
+function L.roleClasses(role, faction)
+	local out = {}
+	for _, cls in ipairs({ "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }) do
+		local bits = P.CLASS_ROLES[cls] or 0
+		local fits = role == 0 or role == nil or (bits % (role * 2) >= role)
+		local onFaction = not ((cls == "PALADIN" and faction == "Horde") or (cls == "SHAMAN" and faction == "Alliance"))
+		if fits and onFaction then out[#out + 1] = cls end
+	end
+	return out
+end
+
+-- q = { class (localized name or nil), min, max, zone, race, name } -> the /who text
+function L.whoQuery(q)
+	local parts = {}
+	local function quoted(prefix, v)
+		v = type(v) == "string" and v:gsub('"', ""):gsub("^%s+", ""):gsub("%s+$", "") or ""
+		if v ~= "" then parts[#parts + 1] = ('%s-"%s"'):format(prefix, v) end
+	end
+	quoted("n", q.name)
+	quoted("c", q.class)
+	quoted("r", q.race)
+	quoted("z", q.zone)
+	local lo, hi = P.int(q.min, 1, 200), P.int(q.max, 1, 200)
+	if lo and hi then
+		if lo > hi then lo, hi = hi, lo end
+		parts[#parts + 1] = lo == hi and tostring(lo) or (lo .. "-" .. hi)
+	elseif lo or hi then
+		parts[#parts + 1] = tostring(lo or hi)
+	end
+	return table.concat(parts, " ")
 end

@@ -95,8 +95,38 @@ local function harvest()
 	end
 end
 
+-- Find players: one /who of the player's own (from a click), its results handed back instead of
+-- probed. The game's /who window is kept shut the same way as for the background search.
+function S.find(query, onResults)
+	if S.inFlight then return false end
+	S.last = GetTime()
+	hush()
+	if C_FriendList.SetWhoToUi then pcall(C_FriendList.SetWhoToUi, true) end
+	local origin = (Enum and Enum.SocialWhoOrigin and Enum.SocialWhoOrigin.Social) or 1
+	local mine = { query = query, at = GetTime(), find = onResults }
+	S.inFlight = mine
+	S.whoAt = GetTime()
+	C_FriendList.SendWho(query, origin)
+	C_Timer.After(8, function() if S.inFlight == mine then release() pcall(onResults, nil) end end)
+	return true
+end
+
 local function results()
 	if not S.inFlight then harvest() return end
+	if S.inFlight.find then
+		local cb = S.inFlight.find
+		-- shown (at most 50) and how many matched in all
+		local shown, total = C_FriendList.GetNumWhoResults()
+		local n = shown or 0
+		local list = {}
+		for i = 1, math.min(n, 50) do
+			local ok, info = pcall(C_FriendList.GetWhoInfo, i)
+			if ok and type(info) == "table" and type(info.fullName) == "string" and info.fullName ~= "" then list[#list + 1] = info end
+		end
+		release()
+		pcall(cb, list, math.max(n, total or 0))
+		return
+	end
 	local q = S.inFlight
 	local n = select(1, C_FriendList.GetNumWhoResults()) or 0
 	local probed = 0
@@ -114,3 +144,4 @@ end
 local f = CreateFrame("Frame")
 f:RegisterEvent("WHO_LIST_UPDATE")
 f:SetScript("OnEvent", results)
+S.onWhoList = results   -- for tests

@@ -84,9 +84,9 @@ b:SetScript("OnEnter", function(self)
 	if L.mine then
 		GameTooltip:AddLine("Listed: " .. L.titleOf(L.mine), 0.25, 1, 0.25)
 		local sec = time() - L.mine.at
-		GameTooltip:AddLine(("For %d:%02d, seen on every shard you can reach"):format(sec / 60, sec % 60), 0.8, 0.8, 0.8)
+		GameTooltip:AddLine(("For %d:%02d, seen on every chat number you can reach"):format(sec / 60, sec % 60), 0.8, 0.8, 0.8)
 	else
-		GameTooltip:AddLine("Find groups on every shard.", 1, 1, 1)
+		GameTooltip:AddLine("Find groups on every chat number.", 1, 1, 1)
 	end
 	local n = 0
 	for _, l in pairs(L.listings) do if time() - l.got < 300 then n = n + 1 end end
