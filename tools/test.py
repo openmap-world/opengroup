@@ -53,6 +53,21 @@ local kb, lb = P.parse(bq)
 local gk, gl = P.parse(P.groupListing{leader="Lead L", seq=2, shard=47, level=55, size=3, age=0, hops=0, class="PRIEST", need=4, cat=2, acts={30}, title="", note="x", spots={ P.spot(4) }})
 check("group listing roundtrip", gk == "G1" and gl.leader == "Lead L" and gl.acts[1] == 30 and #gl.spots == 1)
 check("group unlisted and ask", P.parse(P.groupUnlisted(5)) == "G0" and select(2, P.parse(P.groupUnlisted(5))).seq == 5 and P.parse(P.groupAsk()) == "GQ")
+-- other shards' Group Finder digests: spaced names, split into parts under the limit, all back
+local many = {}
+for i = 1, 60 do many[i] = { leader = "Leader Number" .. i, act = 30 + i, size = 3, need = 6, age = i } end
+local msgs = P.finderDigest(56, 7, many)
+local back, okLen = {}, true
+for _, m in ipairs(msgs) do
+  if #m > 250 then okLen = false end
+  local k, d = P.parse(m)
+  if k == "F1" and d.shard == 56 and d.digest == 7 and d.parts == #msgs then for _, it in ipairs(d.items) do back[#back+1] = it end end
+end
+check("digest parts under the limit", okLen and #msgs > 1)
+check("digest round trip with spaced names", #back == 60 and back[1].leader == "Leader Number1" and back[60].act == 90 and back[60].age == 60)
+check("digest caps at 60", (function() local big = {} for i = 1, 80 do big[i] = { leader = "L" .. i, act = 1, size = 1, need = 1, age = 0 } end
+  local n = 0 for _, m in ipairs(P.finderDigest(1, 1, big)) do n = n + #select(2, P.parse(m)).items end return n == 60 end)())
+check("reporting claim", P.parse(P.reporting(12)) == "R1" and select(2, P.parse(P.reporting(12))).groups == 12)
 check("bg queue roundtrip", kb == "L1" and lb.cat == P.BGQ_OFFER and lb.acts[1] == 40 and P.isBGQ(lb.cat) and not P.isBGQ(2))
 -- open spots
 local spots = { P.spot(P.TANK, "warrior"), P.spot(P.DAMAGE, "HUNTER", 54, 52), P.spot(0) }
@@ -99,7 +114,8 @@ local NAME, SHARD, BUS = ...
 CLOCK = 1000
 function time() return CLOCK end
 function GetTime() return CLOCK end
-function UnitName() return NAME end
+-- like Forever: the second part of a name comes back separately
+function UnitName() local f, l = NAME:match("^(%S+) (.+)$") if f then return f, l end return NAME end
 function UnitLevel() return 58 end
 function UnitClass() return "Warrior", "WARRIOR" end
 function UnitFactionGroup() return "Horde" end
@@ -198,6 +214,10 @@ assert not listing("Bob B","Ann A")
 # ping
 clients["Ann A"].eval("function(n) OpenGroup.ping(n) end")("Bob B"); run()
 print("ping:", [m for m in clients["Ann A"].globals().PRINTED.values() if "ping" in m][-1])
+
+# two-part names: every client knows itself by its full name, and a relayed listing carries it
+for c in ["Ann A","Dan D"]: assert clients[c].eval("function() return OpenGroup.me() end")() == c
+print("names from units:", clients["Ann A"].eval("function() return OpenGroup.me() end")())
 
 # guards: a passed-on listing for a leader who never answers is dropped after a minute
 d = clients["Dan D"]

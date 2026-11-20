@@ -42,7 +42,18 @@ function L.short(name)
 	return type(name) == "string" and (name:match("^([^%-]+)") or name) or "?"
 end
 
-function L.me() return (UnitName("player")) end
+-- A unit's full name. Forever's names have two parts ("Ji Unit"), and UnitName hands the second
+-- one back separately (where other clients put the realm), so taking only its first value cut
+-- "Stuxnet Metasploit" to "Stuxnet": whispers then went to the wrong name.
+function L.unitName(unit)
+	local ok, n, r = pcall(UnitName, unit)
+	if not ok or type(n) ~= "string" or n == "" then return nil end
+	if n:find(" ", 1, true) then return n end
+	if type(r) == "string" and r ~= "" then return n .. " " .. r end
+	return n
+end
+
+function L.me() return L.unitName("player") end
 
 -- Is this name us? /who and addon senders may add "-Realm" to our own name.
 function L.isMe(name)
@@ -376,6 +387,12 @@ function L.receive(msg, sender)
 			store(d, sender)
 			relay(d, sender)
 		end
+	elseif kind == "F1" then
+		-- another shard's Group Finder groups (Nearby keeps them)
+		if L.peers[sender] then L.peers[sender].seen = now() end
+		if L.onFinderDigest then pcall(L.onFinderDigest, sender, d) end
+	elseif kind == "R1" then
+		if L.onReporter then pcall(L.onReporter, sender, d) end
 	elseif kind == "J1" then
 		if L.onJoinRequest then pcall(L.onJoinRequest, sender, d) end
 	elseif kind == "I1" then
@@ -728,6 +745,7 @@ function L.rowOf(l, myShard)
 	local r = { l = l, leader = l.leader or "?", class = l.class, level = l.level or 0, size = l.size or 1,
 		need = l.need or 0, spots = l.spots, note = l.note or "", got = l.got or 0, shard = l.shard or 0, cat = l.cat or 0 }
 	r.where = l.src == "finder" and "finder" or l.src == "chat" and "chat" or (l.shard == myShard and "mine" or "other")
+	r.remote = l.src == "remote"   -- another shard's Group Finder, passed on by an OpenGroup player there
 	r.kind = l.cat == P.SUMMON_CAT and "summon" or P.isBGQ(l.cat) and "bgq" or (r.size > 1 and "group" or "player")
 	-- the activity: the first one we know names it; the level range covers all of them
 	local min, max
@@ -797,7 +815,7 @@ end
 local WHERE_ORDER = { other = 1, mine = 2, finder = 3, chat = 4 }
 function L.whereOK(r, where)
 	if not where or where == "all" then return true end
-	if where == "og" then return r.where == "other" or r.where == "mine" end
+	if where == "og" then return (r.where == "other" or r.where == "mine") and not r.remote end
 	return r.where == where
 end
 
@@ -990,7 +1008,7 @@ function L.personInfo(name)
 		local raid = IsInRaid and IsInRaid()
 		for i = 1, raid and 40 or 4 do
 			local unit = (raid and "raid" or "party") .. i
-			if UnitExists and UnitExists(unit) and L.short(UnitName(unit) or "") == name then
+			if UnitExists and UnitExists(unit) and L.short(L.unitName(unit) or "") == name then
 				p.class = p.class or select(2, UnitClass(unit))
 				local lv = UnitLevel(unit)
 				if lv and lv > 0 then p.level = lv end
@@ -1108,7 +1126,7 @@ function L.groupLeader()
 	local raid = IsInRaid and IsInRaid()
 	for i = 1, raid and 40 or 4 do
 		local unit = (raid and "raid" or "party") .. i
-		if UnitExists and UnitExists(unit) and UnitIsGroupLeader(unit) then return (UnitName(unit)) end
+		if UnitExists and UnitExists(unit) and UnitIsGroupLeader(unit) then return L.unitName(unit) end
 	end
 	return nil
 end

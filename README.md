@@ -12,7 +12,7 @@ OpenGroup is free and always will be. If you'd like to support it, you can buy m
 
 - Browse groups and players from all shards, starting with your level, in columns you can sort, grouped by activity
 - Search and filter by name, activity, category, shard or level
-- See groups from the game's Group Finder and LFG chat on your own shard as well
+- See the game's Group Finder groups from every shard where an OpenGroup player is, and LFG chat on your own shard
 - List your group, or yourself, for a dungeon, zone, quest or anything else, with a short note
 - Set each open spot's role, class and level, and auto invite people who fit
 - Your party sees your group's listing in their OpenGroup too
@@ -26,6 +26,8 @@ OpenGroup is free and always will be. If you'd like to support it, you can buy m
 ## How it works
 
 OpenGroup talks to other players who have it installed using hidden addon whispers, which work across shards. It finds them through your friends list, guild, party, whispers, `/who` and LFG chat, and every user it finds tells it about a few more.
+
+Each shard's Group Finder groups are passed on too: one OpenGroup player per shard sends what their Group Finder shows to OpenGroup players on other shards every 90 seconds (the group leader's name, activity, size and the roles it needs).
 
 Listings are re-sent every 90 seconds and expire 5 minutes after the last update. Other users can see your character name, level, class, shard, what you listed for, your roles and your note.
 

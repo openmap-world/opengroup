@@ -33,6 +33,14 @@
 --   G1;<the L1 fields>                to PARTY/RAID: the leader's listing, so the party's OpenGroup shows it
 --   G0;<seq>                          to PARTY/RAID: the leader unlisted the group
 --   GQ                                to PARTY/RAID: "what is our group listed for?" (after a reload)
+--   F1;<shard>;<digest>;<part>;<parts>;<items>
+--                                     the game's Group Finder groups on the sender's shard, for OpenGroup
+--                                     players on other shards: items split by ",", each
+--                                     <leader>/<activity>/<size>/<need>/<age>. A digest (numbered) may
+--                                     take several parts; groups missing from a reporter's latest
+--                                     complete digest are gone. These leaders don't run OpenGroup.
+--   R1;<groups>                       to OpenGroup players on the same shard: "I'm reporting this
+--                                     shard's Group Finder" (one reporter per shard at a time)
 -- Fields never contain ";" or "|" (stripped on the way in and out). A message stays under 250 bytes.
 --
 -- Keeping versions compatible (anyone can run their own client, and players update at different
@@ -81,7 +89,7 @@ local function split(s)
 	return out
 end
 
-P.VERSION = "0.6.1"
+P.VERSION = "0.6.2-test"
 P.MAX_PX = 10           -- names per peer-exchange message
 
 function P.hello(shard, level) return ("H1;%d;%d;%s"):format(shard or 0, level or 0, clean(P.VERSION, 16)) end
@@ -115,6 +123,35 @@ function P.invited(title) return "I1;" .. clean(title, P.TITLE_LEN) end
 function P.groupListing(l) return "G1;" .. P.listing(l):sub(4) end
 function P.groupUnlisted(seq) return ("G0;%d"):format(int(seq, 0, 2^31) or 0) end
 function P.groupAsk() return "GQ" end
+
+-- Group Finder digests: items = { { leader, act, size, need, age } }. Returns the messages, each
+-- under the length limit, at most P.MAX_DIGEST groups in all.
+P.MAX_DIGEST = 60
+function P.finderDigest(shard, digest, items)
+	local entries = {}
+	for _, it in ipairs(items or {}) do
+		if #entries >= P.MAX_DIGEST then break end
+		local name = clean(it.leader, P.NAME_LEN):gsub("[,/]", "")
+		local act = int(it.act, 0, 2^31) or 0
+		if name ~= "" then
+			entries[#entries + 1] = ("%s/%d/%d/%d/%d"):format(name, act, int(it.size, 1, 40) or 1, int(it.need, 0, 7) or 0, int(it.age, 0, 86400) or 0)
+		end
+	end
+	local head = ("F1;%d;%d;"):format(int(shard, 0, 99999) or 0, int(digest, 0, 2^31) or 0)
+	local parts, cur = {}, {}
+	local room = P.MAX_LEN - #head - 8   -- the part numbers
+	local len = 0
+	for _, e in ipairs(entries) do
+		if #cur > 0 and len + #e + 1 > room then parts[#parts + 1] = cur cur, len = {}, 0 end
+		cur[#cur + 1] = e
+		len = len + #e + 1
+	end
+	if #cur > 0 or #parts == 0 then parts[#parts + 1] = cur end
+	local out = {}
+	for i, p in ipairs(parts) do out[i] = head .. i .. ";" .. #parts .. ";" .. table.concat(p, ",") end
+	return out
+end
+function P.reporting(groups) return ("R1;%d"):format(int(groups, 0, 999) or 0) end
 
 P.TANK, P.HEALER, P.DAMAGE = 1, 2, 4
 
@@ -299,6 +336,22 @@ function P.parse(msg)
 		local level, need = int(f[3], 0, 200), int(f[4], 0, 7)
 		if not level or not need then return nil end
 		return kind, { class = clean(f[2], 12):upper():gsub("[^A-Z]", ""), level = level, need = need }
+	elseif kind == "F1" then
+		local shard, digest = int(f[2], 0, 99999), int(f[3], 0, 2^31)
+		local part, parts = int(f[4], 1, 99), int(f[5], 1, 99)
+		if not (shard and digest and part and parts and part <= parts) then return nil end
+		local items = {}
+		for e in (f[6] or ""):gmatch("[^,]+") do
+			local name, act, size, need, age = e:match("^([^/]+)/(%d+)/(%d+)/(%d+)/(%d+)$")
+			name = clean(name, P.NAME_LEN)
+			act, size, need, age = int(act, 0, 2^31), int(size, 1, 40), int(need, 0, 7), int(age, 0, 86400)
+			if name ~= "" and act and size and need and age and #items < P.MAX_DIGEST then
+				items[#items + 1] = { leader = name, act = act, size = size, need = need, age = age }
+			end
+		end
+		return kind, { shard = shard, digest = digest, part = part, parts = parts, items = items }
+	elseif kind == "R1" then
+		return kind, { groups = int(f[2], 0, 999) or 0 }
 	elseif kind == "G1" then
 		local k, l = P.parse("L1;" .. msg:sub(4))
 		if k ~= "L1" then return nil end

@@ -3,7 +3,7 @@
 ## Notes: Find groups on every shard, not just your own. /og
 ## Author: OpenGroup contributors
 ## IconTexture: Interface\AddOns\OpenGroup\Media\icon
-## Version: 0.6.1
+## Version: 0.6.2-test
 ## SavedVariables: OpenGroupDB
 ## Category: Group Finder
 ## X-Category: Chat & Communication

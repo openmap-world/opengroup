@@ -9,6 +9,7 @@
 -- as a key, and anything unreadable is skipped.
 local L = OpenGroup
 local A = OpenGroup_Activities
+local P = OpenGroup_Proto
 local N = {}
 OpenGroup_Nearby = N
 L.nearby = {}   -- [name] = a listing-shaped table, plus src = "finder" | "chat"
@@ -420,3 +421,129 @@ function N.expire()
 	if gone then changed() end
 end
 if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(30, function() pcall(N.expire) end) end
+
+-- --------------------------------------------------------------------------------------------
+-- Every shard's Group Finder. The game only shows a shard its own groups, so each shard's
+-- Group Finder results travel to OpenGroup players on the other shards: one reporter per shard
+-- (the OpenGroup player there whose name sorts first among those reporting; the others stand by),
+-- a digest every 90 seconds of what that shard's searches showed (any search: ours, the game's
+-- window, another addon), at most 60 groups. Groups from other shards show in Browse marked as
+-- seen in that shard's Group Finder; they're never auto-invited, and they go when the reporter's
+-- next digest leaves them out or after 5 minutes.
+
+L.remote = {}             -- [leader] = a listing-shaped row, src = "remote", shard, reporter
+N.claims = {}             -- [name] = time: an OpenGroup player on our shard said they report
+N.stats.harvested, N.stats.reported, N.stats.remoteBy = 0, 0, {}
+-- how many passed-on groups we already had in our own Group Finder results: if the game's Group
+-- Finder turns out to be shared between shards, this is near 100% and the sharing adds nothing
+N.stats.overlapSeen, N.stats.overlapTotal = 0, 0
+local REPORT_EVERY, CLAIM_KEEP, REMOTE_KEEP, MAX_TARGETS = 90, 150, 300, 8
+local digestSeq = 0
+local partial = {}        -- [reporter] = { digest, seen = { [leader] = true }, parts = n }
+
+-- our shard's Group Finder groups worth passing on: fresh, not OpenGroup users (they travel themselves)
+function N.digestItems()
+	local items, t = {}, clock()
+	for name, l in pairs(L.nearby) do
+		if l.src == "finder" and t - (l.got or 0) < FINDER_KEEP and not L.listings[name] and not L.peers[name] then
+			items[#items + 1] = { leader = name, act = (l.acts or {})[1] or 0, size = l.size or 1, need = l.need or 0, age = math.max(0, t - (l.got or t)), got = l.got or 0 }
+		end
+	end
+	table.sort(items, function(a, b) return a.got > b.got end)
+	while #items > P.MAX_DIGEST do table.remove(items) end
+	N.stats.harvested = #items
+	return items
+end
+
+-- Do we report our shard? Only with fresh results of our own, and only if no OpenGroup player on our
+-- shard whose name sorts first has said recently that they report. Pure, for tests.
+function N.shouldReport(me, claims, now, haveFresh)
+	if not haveFresh then return false end
+	for name, at in pairs(claims) do
+		if now - at < CLAIM_KEEP and name < me then return false end
+	end
+	return true
+end
+
+local turn = 0
+function N.report()
+	if not enabled() or not L.shard or L.shard() <= 0 then return false end
+	local fresh = N.resultsAt and GetTime() - N.resultsAt < FINDER_KEEP
+	if not N.shouldReport(L.me() or "", N.claims, clock(), fresh) then return false end
+	local items = N.digestItems()
+	if #items == 0 then return false end
+	local mine, far, near = L.shard(), {}, {}
+	for name, p in pairs(L.live()) do
+		if (p.shard or 0) > 0 and p.shard ~= mine then far[#far + 1] = name
+		elseif p.shard == mine then near[#near + 1] = name end
+	end
+	if #far == 0 then return false end
+	table.sort(far)
+	digestSeq = digestSeq + 1
+	local msgs = P.finderDigest(mine, digestSeq, items)
+	-- a few other-shard players each round, taking turns
+	for i = 1, math.min(MAX_TARGETS, #far) do
+		turn = turn % #far + 1
+		for _, m in ipairs(msgs) do L.send(far[turn], m, true) end
+	end
+	-- tell the others on our shard that we report, so they stand by
+	table.sort(near)
+	for i = 1, math.min(10, #near) do L.send(near[i], P.reporting(#items), true) end
+	N.stats.reported = N.stats.reported + #items
+	return true
+end
+
+L.onReporter = function(sender, d)
+	local p = L.peers[sender]
+	if p and p.shard == L.shard() then N.claims[L.short(sender)] = clock() end
+end
+
+L.onFinderDigest = function(sender, d)
+	if d.shard <= 0 or d.shard == L.shard() then return end   -- our own shard we see ourselves
+	local t = clock()
+	local reporter = L.short(sender)
+	local pend = partial[reporter]
+	if not pend or pend.digest ~= d.digest then pend = { digest = d.digest, seen = {}, got = 0 } partial[reporter] = pend end
+	pend.got = pend.got + 1
+	for _, it in ipairs(d.items) do
+		local name = it.leader
+		local mine = L.nearby[name]
+		N.stats.overlapTotal = N.stats.overlapTotal + 1
+		if mine and mine.src == "finder" then N.stats.overlapSeen = N.stats.overlapSeen + 1 end
+		-- someone OpenGroup knows directly, or in our own results, is shown from there instead
+		if not L.isMe(name) and not L.listings[name] and not L.nearby[name] and not (L.ignored and L.ignored(name)) then
+			L.remote[name] = {
+				leader = name, src = "remote", shard = d.shard, reporter = reporter, digest = d.digest,
+				size = it.size, need = it.need, acts = it.act > 0 and { it.act } or {}, cat = catOf({ it.act }),
+				level = 0, got = t - it.age, seq = 0, hops = 0, price = 0, quest = 0, title = "", note = "",
+			}
+			pend.seen[name] = true
+		end
+	end
+	-- the last part of a digest: what this reporter no longer lists is gone
+	if d.part == d.parts then
+		local n = 0
+		for name, r in pairs(L.remote) do
+			if r.reporter == reporter then
+				if not pend.seen[name] then L.remote[name] = nil else n = n + 1 end
+			end
+		end
+		N.stats.remoteBy[d.shard] = n
+		partial[reporter] = nil
+	end
+	changed()
+end
+
+function N.expireRemote()
+	local t, gone = clock(), false
+	for name, r in pairs(L.remote) do
+		if t - (r.got or 0) > REMOTE_KEEP then L.remote[name] = nil gone = true end
+	end
+	for name, at in pairs(N.claims) do if t - at > CLAIM_KEEP then N.claims[name] = nil end end
+	if not enabled() and next(L.remote) then L.remote = {} gone = true end
+	if gone then changed() end
+end
+if C_Timer and C_Timer.NewTicker then
+	C_Timer.NewTicker(REPORT_EVERY, function() pcall(N.report) end)
+	C_Timer.NewTicker(30, function() pcall(N.expireRemote) end)
+end

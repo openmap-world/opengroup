@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.6.2-test
+
+- Every shard's Group Finder: OpenGroup players pass on the groups their shard's Group Finder shows, so you see groups from other shards too (marked GF, with the shard and who saw them)
+- Fixed: two-part names ("Stuxnet Metasploit") were cut to the first word when taken from your target, your party or yourself. Test connection to target, the party listing and passed-on listings now use the full name
+- Players whose shard isn't known yet show as "Shard unknown" instead of "Shard 0"
+
 ## v0.6.1
 
 - Players on your ignore list are hidden in Browse, Whispers and auto invite, and their messages are ignored

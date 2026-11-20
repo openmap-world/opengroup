@@ -620,7 +620,8 @@ local function buildRow(row)
 		GameTooltip:AddLine(" ")
 		GameTooltip:AddLine(("%s%s|r%s"):format(W.classColor(l.class), L.short(l.leader), l.level > 0 and ("  level " .. l.level) or ""))
 		GameTooltip:AddLine(("Shard %d   |   %s"):format(l.shard, l.size <= 1 and "solo" or l.sizeGuess and "a group" or (l.size .. " in group")), .8, .8, .8)
-		if l.src == "finder" then GameTooltip:AddLine("Listed in the game's Group Finder (your shard only)", .5, .5, .5)
+		if l.src == "remote" then GameTooltip:AddLine(("Seen in the Group Finder on shard %d by %s, %s ago"):format(l.shard, l.reporter or "?", ago(time() - (l.got or time()))), .5, .5, .5, true)
+		elseif l.src == "finder" then GameTooltip:AddLine("Listed in the game's Group Finder (your shard only)", .5, .5, .5)
 		elseif l.src == "chat" then GameTooltip:AddLine(("Posted in %s chat (your shard only)"):format(l.chan or "a"), .5, .5, .5)
 		else GameTooltip:AddLine(l.hops == 0 and "Heard from them directly" or ("Passed on by %s"):format(L.short(l.via)), .5, .5, .5) end
 		if l.unconfirmed then GameTooltip:AddLine("Not confirmed by the leader yet. OpenGroup is checking with them.", 1, .6, .2, true) end
@@ -728,7 +729,8 @@ local function fillRow(row, d)
 	row.note:SetText(note)
 	row.note:SetShown(not compact and note ~= "")
 	row.shard:SetText((r.where == "finder" and (GREY .. "Group Finder|r") or r.where == "chat" and (GREY .. (l.chan or "LFG chat") .. "|r")
-		or r.where == "mine" and (GREY .. "Your shard|r") or (GOLD .. "Shard " .. l.shard .. "|r")) .. (l.unconfirmed and (GREY .. " ?|r") or ""))
+		or r.where == "mine" and (GREY .. "Your shard|r") or (GOLD .. "Shard " .. l.shard .. "|r")) .. (l.unconfirmed and (GREY .. " ?|r") or "")
+		.. (r.remote and (GREY .. " GF|r") or ""))
 	-- Needs: one icon per open spot (the class where one is set), else the role bits; groups show
 	-- what they want, players the roles they play
 	local icons = {}
@@ -808,7 +810,7 @@ actBtn:SetPoint("RIGHT", 0, 0)
 local countText = browse.footer:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
 countText:SetPoint("CENTER")
 
-local function selectedListing() return selected and (L.listings[selected] or L.nearby[selected]) end
+local function selectedListing() return selected and (L.listings[selected] or L.nearby[selected] or (L.remote and L.remote[selected])) end
 
 local function openWhisper(name, text)
 	local tell = ChatFrame_SendTell or (ChatFrameUtil and ChatFrameUtil.SendTell)
@@ -965,6 +967,10 @@ function browse.refresh()
 	for _, l in pairs(L.listings) do consider(l) end
 	for name, l in pairs(L.nearby) do
 		if not L.listings[name] and not L.isMe(name) then consider(l) end
+	end
+	-- other shards' Group Finder groups
+	for name, l in pairs(L.remote or {}) do
+		if not L.listings[name] and not L.nearby[name] and not L.isMe(name) then consider(l) end
 	end
 	L.sortRows(rows, d0.sortKey, d0.sortDesc)
 	L.sortRows(matches, nil, false)
@@ -2340,7 +2346,7 @@ pingBtn:SetSize(200, 24)
 pingBtn:SetPoint("RIGHT")
 pingBtn:SetText("Test connection to target")
 pingBtn:SetScript("OnClick", function()
-	local name = UnitName("target")
+	local name = L.unitName("target")
 	if not name or not UnitIsPlayer("target") then UIErrorsFrame:AddMessage("Target a player who runs OpenGroup first.", 1, .1, .1) return end
 	L.ping(name)
 end)
@@ -2380,7 +2386,9 @@ function net.refresh()
 			local fresh = live[name] and time() - (p.seen or 0) < 900
 			r.dot:SetColorTexture(fresh and 0.25 or 0.4, fresh and 1 or 0.4, fresh and 0.25 or 0.4, 1)
 			r.name:SetText(L.short(name) .. (p.level and p.level > 0 and (GREY .. "  " .. p.level .. "|r") or ""))
-			r.info:SetText(("%sShard %s|r   %s"):format(p.shard == myShard and GREEN or GOLD, tostring(p.shard or "?"),
+			-- shard 0 means we haven't heard it yet (they passed on a listing, but no hello so far)
+			local shardText = (p.shard or 0) > 0 and ("Shard " .. p.shard) or "Shard unknown"
+			r.info:SetText(("%s%s|r   %s"):format(((p.shard or 0) > 0 and p.shard == myShard) and GREEN or (p.shard or 0) > 0 and GOLD or GREY, shardText,
 				live[name] and (ago(time() - (p.seen or 0)) .. " ago") or "offline"))
 			r:Show()
 		else r:Hide() end
@@ -3210,6 +3218,13 @@ SlashCmdList.OPENGROUP = function(msg)
 			L.print(("your shard: %d from the Group Finder, %d from chat (%d chat posts read, %d searches, %d posted to LookingForGroup, channel %s)"):format(
 				Nb.count("finder"), Nb.count("chat"), Nb.stats.chat, Nb.stats.searches, Nb.stats.posted, tostring(Nb.lfgChannel() or "not joined")))
 			if Nb.blocked then L.print(("blocked by the game this session: %s (%d times)"):format(Nb.blocked, Nb.blockedCount or 1) .. (Nb.noSearch and " (Group Finder searches paused)" or "")) end
+			local by = {}
+			for shard, n in pairs(Nb.stats.remoteBy or {}) do by[#by + 1] = ("shard %d: %d"):format(shard, n) end
+			table.sort(by)
+			local tot, seen = Nb.stats.overlapTotal or 0, Nb.stats.overlapSeen or 0
+			L.print(("other shards' Group Finder: %d groups from here to share, %d sent so far; received %s%s"):format(
+				Nb.stats.harvested or 0, Nb.stats.reported or 0, #by > 0 and table.concat(by, ", ") or "none yet",
+				tot > 0 and ("; %d%% of received were already in your own results (%d of %d)"):format(math.floor(100 * seen / tot + 0.5), seen, tot) or ""))
 			if Nb.blockedFrom then
 				L.print(("the search was %.2fs before the block, called from:"):format(Nb.blockedAfter or -1))
 				for line in tostring(Nb.blockedFrom):gmatch("[^\n]+") do L.print("  " .. (line:gsub("Interface[/\\]AddOns[/\\]", ""))) end

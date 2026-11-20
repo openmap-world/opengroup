@@ -331,6 +331,53 @@ assert(titles[1] == "Your recent listings" and titles[2] == "Good for your level
 LI.relist(OpenGroupDB.recent[1])
 assert(OpenGroup.mine and OpenGroup.titleOf(OpenGroup.mine) == "Blackrock Depths", "listing again from a recent pick")
 OpenGroup.delist()
+-- another shard's Group Finder: a digest from an OpenGroup player on shard 56 shows in Browse
+local N = OpenGroup_Nearby
+local Pr = OpenGroup_Proto
+OpenGroup.listings, OpenGroup.nearby, OpenGroup.remote = {}, {}, {}
+OpenGroup.peers["Rep R"] = { shard = 56, level = 60, seen = CLOCK }
+local dg = Pr.finderDigest(56, 1, { { leader = "Far Away", act = 30, size = 3, need = 4, age = 20 }, { leader = "Other Group", act = 31, size = 2, need = 6, age = 5 } })
+local dropped0 = OpenGroup.stats.dropped or 0
+for _, m in ipairs(dg) do OpenGroup.receive(m, "Rep R") end
+assert(OpenGroup.remote["Far Away"] and OpenGroup.remote["Far Away"].shard == 56 and OpenGroup.remote["Far Away"].reporter == "Rep R", "a remote group is kept with its shard and reporter")
+OpenGroupDB.allLevels = true OpenGroupDB.where = "all"
+OpenGroupDB.tab = "browse" SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+local seenRemote = false
+for _, d in ipairs(PROVIDED) do if d.l and d.l.leader == "Far Away" then seenRemote = d.r.remote and d.r.where == "other"
+  local row = CreateFrame("Button") row.built=false INIT(row, d) row.scripts.OnEnter(row) end end
+assert(seenRemote, "the remote group is in Browse, as another shard's")
+OpenGroupDB.where = "og" SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+for _, d in ipairs(PROVIDED) do assert(not (d.l and d.l.src == "remote"), "OpenGroup players filter leaves them out") end
+OpenGroupDB.where = "all"
+-- the reporter's next digest leaves one out: it goes
+for _, m in ipairs(Pr.finderDigest(56, 2, { { leader = "Far Away", act = 30, size = 4, need = 4, age = 1 } })) do OpenGroup.receive(m, "Rep R") end
+assert(OpenGroup.remote["Far Away"] and OpenGroup.remote["Far Away"].size == 4 and OpenGroup.remote["Other Group"] == nil, "a digest replaces the last one")
+-- a passed-on group we already have in our own results stays ours, and counts as overlap
+OpenGroup.nearby["Seen Here"] = { leader = "Seen Here", src = "finder", size = 2, need = 4, acts = {30}, got = CLOCK, level = 0, shard = 47 }
+local ov0 = N.stats.overlapSeen
+for _, m in ipairs(Pr.finderDigest(56, 9, { { leader = "Seen Here", act = 30, size = 2, need = 4, age = 1 }, { leader = "Far Away", act = 30, size = 4, need = 4, age = 1 } })) do OpenGroup.receive(m, "Rep R") end
+assert(OpenGroup.remote["Seen Here"] == nil and N.stats.overlapSeen == ov0 + 1, "local results win, overlap counted")
+OpenGroup.nearby["Seen Here"] = nil
+-- our own shard's digest is ignored; 5 minutes on, the rest expire
+for _, m in ipairs(Pr.finderDigest(47, 3, { { leader = "Home Group", act = 30, size = 2, need = 4, age = 1 } })) do OpenGroup.receive(m, "Rep R") end
+assert(OpenGroup.remote["Home Group"] == nil, "our own shard's digest is ignored")
+CLOCK = CLOCK + 400 N.expireRemote()
+assert(next(OpenGroup.remote) == nil, "remote groups expire")
+assert((OpenGroup.stats.dropped or 0) == dropped0, "a digest doesn't trip the message budget")
+-- one reporter per shard: the name that sorts first reports, the other stands by
+assert(N.shouldReport("Bob B", {}, 1000, true) and not N.shouldReport("Bob B", { ["Ann A"] = 990 }, 1000, true), "election")
+assert(N.shouldReport("Ann A", { ["Bob B"] = 990 }, 1000, true) and not N.shouldReport("Ann A", {}, 1000, false), "election: earlier name, and only with fresh results")
+assert(N.shouldReport("Bob B", { ["Ann A"] = 800 }, 1000, true), "a reporter gone quiet is replaced")
+-- the sending side: our shard's Group Finder rows go to the other-shard peer, and a claim to ours
+OpenGroup.nearby = {}
+OpenGroup.nearby["Near One"] = { leader = "Near One", src = "finder", size = 3, need = 6, acts = {30}, got = CLOCK, level = 0, shard = 47 }
+OpenGroup.peers["Rep R"].seen = CLOCK OpenGroup.peers["Mate M"] = { shard = 47, level = 60, seen = CLOCK }
+N.resultsAt = GetTime() N.claims = {}
+local q0 = OpenGroup.queued()
+assert(N.report() == true, "we report our shard")
+print("report queued:", OpenGroup.queued() - q0, "| harvested:", N.stats.harvested)
+assert(OpenGroup.queued() - q0 >= 2 and N.stats.harvested == 1, "a digest to the other shard and a claim to ours")
+print("other shards' Group Finder ok")
 -- pinging yourself sends nothing
 OpenGroup.pings = {}
 OpenGroup.ping("Ann A")
