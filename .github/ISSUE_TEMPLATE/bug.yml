@@ -1,0 +1,38 @@
+name: Bug report
+description: Something isn't working, or you got a Lua error
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected and what happened instead. Add a screenshot if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: "/og status output"
+      description: Type /og status in game and paste the result here.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: OpenGroup version
+      description: You can see it in the addon list.
+      placeholder: 0.6.0-beta
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Lua error
+      description: If you got one, paste the whole message. You can turn errors on with /console scriptErrors 1.
+      render: text
+  - type: textarea
+    id: addons
+    attributes:
+      label: Other addons
+      description: Any other addons you use, especially group finder or chat addons.

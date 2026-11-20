@@ -1,0 +1,24 @@
+name: test
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read                  # tests only read the code
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install lupa
+      - run: python tools/test.py OpenGroup
+      - run: python tools/ui_smoke.py OpenGroup
+      - name: The tools at least compile
+        run: python -m compileall -q tools

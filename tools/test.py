@@ -1,7 +1,7 @@
 import sys, os
 from lupa.lua51 import LuaRuntime
 D = sys.argv[1]
-src = {f: open(os.path.join(D, f)).read() for f in ["Proto.lua","Activities.lua","Quests.lua","Core.lua","Scan.lua","Nearby.lua","Widgets.lua","Alert.lua","UI.lua","Minimap.lua","GroupFinderTab.lua"]}
+src = {f: open(os.path.join(D, f)).read() for f in ["Proto.lua","Activities.lua","Quests.lua","Core.lua","Scan.lua","Nearby.lua","Widgets.lua","Alert.lua","UI.lua","AutoInvite.lua","Minimap.lua","GroupFinderTab.lua"]}
 
 # 1. syntax
 lua = LuaRuntime()
@@ -50,7 +50,43 @@ check("version number", P.versionNumber("0.6.0-test") == 600 and P.versionNumber
 check("refresh rule", P.isRefresh({seq=1, got=1000}, {seq=1, age=0}, 1100) and not P.isRefresh({seq=1, got=1000}, {seq=1, age=0}, 1020) and not P.isRefresh(nil, {seq=1}, 5))
 local bq = P.listing{leader="Pvp P", seq=1, shard=61, level=60, size=1, age=0, hops=0, class="WARRIOR", need=0, cat=P.BGQ_OFFER, acts={40}, title="", note=""}
 local kb, lb = P.parse(bq)
+local gk, gl = P.parse(P.groupListing{leader="Lead L", seq=2, shard=47, level=55, size=3, age=0, hops=0, class="PRIEST", need=4, cat=2, acts={30}, title="", note="x", spots={ P.spot(4) }})
+check("group listing roundtrip", gk == "G1" and gl.leader == "Lead L" and gl.acts[1] == 30 and #gl.spots == 1)
+check("group unlisted and ask", P.parse(P.groupUnlisted(5)) == "G0" and select(2, P.parse(P.groupUnlisted(5))).seq == 5 and P.parse(P.groupAsk()) == "GQ")
 check("bg queue roundtrip", kb == "L1" and lb.cat == P.BGQ_OFFER and lb.acts[1] == 40 and P.isBGQ(lb.cat) and not P.isBGQ(2))
+-- open spots
+local spots = { P.spot(P.TANK, "warrior"), P.spot(P.DAMAGE, "HUNTER", 54, 52), P.spot(0) }
+local sp = P.listing{leader="Spot S", seq=1, shard=47, level=55, size=2, age=0, hops=0, class="PRIEST", need=P.needOfSpots(spots), cat=2, acts={30}, title="", note="lava run", spots=spots}
+local ks, ls = P.parse(sp)
+check("spots roundtrip", ks == "L1" and #ls.spots == 3 and ls.spots[1].role == P.TANK and ls.spots[1].class == "WARRIOR"
+  and ls.spots[2].class == "HUNTER" and ls.spots[2].min == 52 and ls.spots[2].max == 54 and ls.spots[3].role == 0 and ls.spots[3].class == nil and ls.note == "lava run")
+check("spots text", P.spotsText(spots) == "T/WARRIOR//,D/HUNTER/52/54,A///")
+check("need from spots", P.needOfSpots(spots) == 7 and P.needOfSpots({ P.spot(P.HEALER), P.spot(P.DAMAGE) }) == 6)
+check("old format has no spots", #select(2, P.parse("L1;A;1;4;1;2;9;0;MAGE;1;2;30,31;0;0;;")).spots == 0)
+-- an older client splits on ";" and reads fields 1 to 16; the spots field after the note changes none of them
+local f = {} for field in (sp .. ";"):gmatch("([^;]*);") do f[#f+1] = field end
+check("old clients read the same fields", #f == 17 and f[16] == "lava run" and f[10] == "7")
+check("junk spots ignored", #P.spotsParse("X/ROGUE//,D/NOTACLASS/1/2,D///,zz") == 2 and P.spotsParse("D/NOTACLASS/1/2,D///")[1].class == nil)
+local fat = P.listing{leader=string.rep("n",48), seq=1, shard=47, level=55, size=2, age=0, hops=0, class="PRIEST", need=7, cat=2, acts={30,31,32,33,34,35,36,37}, title="", note=string.rep("z",60),
+  spots={ P.spot(1,"WARRIOR",10,60), P.spot(2,"PALADIN",10,60), P.spot(4,"WARLOCK",10,60), P.spot(4,"HUNTER",10,60) }}
+check("long listing keeps its spots", #fat <= 250 and #select(2, P.parse(fat)).spots == 4)
+-- matching
+local hunt = P.spot(P.DAMAGE, "HUNTER", 52, 54)
+check("hunter 53 fits", P.spotFits(hunt, "HUNTER", 53, 4) == P.DAMAGE)
+check("mage doesn't fit", P.spotFits(hunt, "MAGE", 53, 4) == nil)
+check("hunter 58 doesn't fit", P.spotFits(hunt, "HUNTER", 58, 4) == nil)
+check("unknown roles: class decides", P.spotFits(P.spot(P.TANK), "WARRIOR", 50, 0) == P.TANK and P.spotFits(P.spot(P.TANK), "MAGE", 50, 0) == nil)
+check("any spot takes a role they play", P.spotFits(P.spot(0), "PRIEST", 50, 2) == P.HEALER)
+local list = { P.spot(P.DAMAGE), P.spot(P.DAMAGE, "HUNTER"), P.spot(0) }
+local bi = P.bestSpot(list, "HUNTER", 53, 4)
+check("most specific first", bi == 2)
+check("skip taken spots", P.bestSpot(list, "HUNTER", 53, 4, { [2] = true }) == 1)
+check("spots from need", P.spotsText(P.spotsFromNeed(3, 3)) == "T///,H///,A///" and P.spotsText(P.spotsFromNeed(0, 3)) == "T///,H///,D///")
+local kj, dj = P.parse(P.join("hunter", 53, 4))
+check("join request roundtrip", kj == "J1" and dj.class == "HUNTER" and dj.level == 53 and dj.need == 4)
+check("join request rejects junk", P.parse("J1;MAGE;nan;4") == nil and P.parse("J1;MAGE;50;9") == nil)
+local ki, di = P.parse(P.invited("Blackrock Depths"))
+check("invited roundtrip", ki == "I1" and di.title == "Blackrock Depths")
 check("relay prefers other shards, skips sender", #tg==2 and tg[1]=="b" and tg[2]=="c")
 return table.concat(out, "\n")
 ''')
@@ -166,7 +202,10 @@ function time() return 5000 end
 function GetTime() return 5000 end
 function UnitLevel() return 58 end
 function GetChannelList() return 1, "General - Orgrimmar", false, 4, "LookingForGroup 47", false end
-function CreateFrame() return { RegisterEvent = function() end, SetScript = function() end } end
+NB_HANDLERS = {}
+function CreateFrame() return { RegisterEvent = function() end, SetScript = function(_, _, fn) NB_HANDLERS[#NB_HANDLERS+1] = fn end } end
+function GetTime() return NB_T or 0 end
+PRINTED = {}
 C_Timer = { After = function(_, fn) fn() end, NewTicker = function() end }
 SECRET = setmetatable({}, { __tostring = function() return "secret" end })
 function canaccessvalue(v) return v ~= SECRET end
@@ -228,7 +267,101 @@ check("lfg channel found", N.lfgChannel() == 4)
 OpenGroupDB = { nearby = false }
 N.expire()
 check("switching off clears", next(OpenGroup.nearby) == nil)
+-- a blocked action right after our search is the search: searches stop; another addon's block is ignored
+OpenGroup.print = function(...) PRINTED[#PRINTED+1] = table.concat({...}, " ") end
+local onEvent = NB_HANDLERS[#NB_HANDLERS]
+onEvent(nil, "ADDON_ACTION_BLOCKED", "SomeOtherAddon", "UNKNOWN()")
+check("other addons' blocks ignored", N.blocked == nil and not N.noSearch)
+N.searchAt, NB_T = 100, 100.2
+onEvent(nil, "ADDON_ACTION_BLOCKED", "OpenGroup", "UNKNOWN()")
+check("block right after a search pauses searches", N.noSearch == true and N.blocked == "C_LFGList.Search" and #PRINTED == 1)
+onEvent(nil, "ADDON_ACTION_BLOCKED", "OpenGroup", "UNKNOWN()")
+check("said once", #PRINTED == 1)
 return table.concat(out, "\n")
+""")
+print(t); assert "FAIL" not in t
+
+# Browse rows: level band, fit, sorting, grouping, the Where migration, columns
+br = rt   # Core is loaded there already
+br.execute(r"""
+local A = OpenGroup_Activities
+A.info[30] = { id = 30, name = "Blackrock Depths", short = "BRD", min = 52, max = 60, cat = 2 }
+A.info[32] = { id = 32, name = "Ragefire Chasm", short = "RFC", min = 13, max = 18, cat = 2 }
+""")
+t = br.execute(r"""
+local L, P = OpenGroup, OpenGroup_Proto
+local out = {}
+local function check(name, cond) out[#out+1] = (cond and "PASS " or "FAIL ") .. name end
+local function row(t) local r = L.rowOf(t, 47) r.dist = L.levelDistance(r, 58) return r end
+local brd = row{ leader = "A", level = 56, size = 3, need = 4, acts = {30}, shard = 55, got = 900, title = "", note = "" }
+local rfc = row{ leader = "B", level = 15, size = 2, need = 4, acts = {32}, shard = 47, got = 990, title = "", note = "" }
+local free = row{ leader = "C", level = 55, size = 1, need = 2, acts = {}, shard = 47, got = 950, title = "Strat", note = "", src = "chat" }
+local far = row{ leader = "D", level = 40, size = 1, need = 2, acts = {}, shard = 47, got = 950, title = "Mara", note = "", src = "finder" }
+check("brd in band at 58", L.inBand(brd, 58))
+check("band slack: 63 still in", L.inBand(brd, 63) and not L.inBand(brd, 64) and L.inBand(brd, 49) and not L.inBand(brd, 48))
+check("rfc out of band", not L.inBand(rfc, 58))
+check("no range: leader within 5", L.inBand(free, 58) and not L.inBand(far, 58))
+check("where", brd.where == "other" and rfc.where == "mine" and free.where == "chat" and far.where == "finder"
+  and L.whereOK(brd, "og") and not L.whereOK(free, "og") and L.whereOK(free, "all") and L.whereOK(far, "finder"))
+local me = { class = "MAGE", level = 58, roles = 0, grouped = false, need = 0 }
+brd.fit, brd.dim = L.rowFit(brd, me)
+local tankOnly = row{ leader = "E", level = 58, size = 4, need = 1, acts = {30}, shard = 55, got = 999, title = "", note = "" }
+tankOnly.fit, tankOnly.dim = L.rowFit(tankOnly, me)
+local full = row{ leader = "F", level = 58, size = 5, need = 0, acts = {30}, shard = 55, got = 999, title = "", note = "" }
+full.fit, full.dim = L.rowFit(full, me)
+local spotGroup = row{ leader = "G", level = 58, size = 3, need = 4, acts = {30}, shard = 55, got = 800, title = "", note = "", spots = { P.spot(4, "HUNTER") } }
+spotGroup.fit, spotGroup.dim = L.rowFit(spotGroup, me)
+check("fit: a mage fits a damage group", brd.fit and not brd.dim)
+check("dim: tank only, full, hunter spot", tankOnly.dim and full.dim and spotGroup.dim and not spotGroup.fit)
+local rows = { full, tankOnly, rfc, brd }
+L.sortRows(rows)
+check("relevance: fit first, dimmed last", rows[1] == brd and (rows[4] == full or rows[4] == tankOnly) and (rows[3] == full or rows[3] == tankOnly))
+L.sortRows(rows, "leader", false)
+check("sort by leader", rows[1].leader == "A" and rows[4].leader == "F")
+L.sortRows(rows, "leader", true)
+check("sort by leader reversed", rows[1].leader == "F")
+L.sortRows(rows, "age", false)
+check("sort by age: newest first", rows[1].got == 999)
+local groups = L.groupRows({ brd, rfc, tankOnly, free }, "act")
+check("group by activity: nearest first, counts", groups[1].text == "Blackrock Depths" and #groups[1].rows == 2 and groups[#groups].text == "Ragefire Chasm")
+local shards = L.groupRows({ free, rfc, brd, far }, "shard")
+check("group by shard: other shards, yours, finder, chat", shards[1].text == "Shard 55" and shards[2].text == "Your shard" and shards[3].text == "Group Finder" and shards[4].text == "LFG chat")
+check("no grouping", L.groupRows({ brd }, "off") == nil)
+check("migrate other shards only", L.migrateBrowse({ otherOnly = true }).where == "other")
+check("migrate group finder off", L.migrateBrowse({ nearby = false }).where == "og")
+local m = L.migrateBrowse({})
+check("migrate defaults", m.where == "all" and m.groupBy == "act" and m.otherOnly == nil)
+check("migrate keeps a choice", L.migrateBrowse({ where = "finder", otherOnly = true }).where == "finder")
+local narrow, wide = L.columns(380), L.columns(1000)
+check("narrow: activity still readable, extras dropped", narrow.at.act.w >= 96 and narrow.hidden.size and narrow.at.leader and narrow.at.needs)
+check("wide: every column, activity takes the rest", not next(wide.hidden) and wide.at.act.w > 400)
+local last = wide.order[#wide.order]
+check("wide: columns fill the width", math.abs(last.x + last.w - 1000) < 1)
+-- whispers: unreadable values are counted, never stored; unread counts; OpenGroup people first
+local SECRETV = setmetatable({}, { __tostring = function() return "secret" end })
+canaccessvalue = function(v) return v ~= SECRETV end
+L.whispers, L.whisperLinks, L.whisperHidden = {}, {}, 0
+L.listings = L.listings or {}
+L.addWhisper("hi, still need a healer?", "Ann A", false, 100, false)
+L.addWhisper("yes, inv", "Ann A", true, 101, false)
+L.addWhisper(SECRETV, "Ann A", false, 102, false)
+L.addWhisper("hello", SECRETV, false, 103, false)
+L.addWhisper("lf tank?", "Bob B-Realm", false, 104, false)
+local ann = L.whispers["Ann A"]
+check("whispers stored, secret text hidden", ann and #ann.msgs == 3 and ann.msgs[3].hidden and ann.msgs[3].text == nil and ann.msgs[2].out)
+check("secret sender skipped, both counted", L.whisperHidden == 2)
+check("unread counts incoming only", ann.unread == 2 and L.whispers["Bob B"].unread == 1 and L.whisperUnread() == 3)
+L.addWhisper("ok", "Bob B", false, 105, true)
+check("viewing: no unread", L.whispers["Bob B"].unread == 1)
+L.whisperLinks["Ann A"] = true
+local wl = L.whisperList(false)
+check("OpenGroup people first", wl[1].name == "Ann A" and wl[2].name == "Bob B")
+check("OpenGroup only", #L.whisperList(true) == 1)
+canaccessvalue = nil
+local mid = L.columns(470)
+local lm = mid.order[#mid.order]
+check("default width fills too", math.abs(lm.x + lm.w - 470) < 1 and mid.at.where ~= nil)
+return table.concat(out, string.char(10))
 """)
 print(t); assert "FAIL" not in t
 print("ALL OK")

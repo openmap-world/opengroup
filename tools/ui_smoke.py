@@ -65,10 +65,10 @@ INIT=nil
 function CreateScrollBoxListLinearView() local v=mock() v.SetElementInitializer=function(self,t,f) INITS=INITS or {} INITS[#INITS+1]=f INIT=INITS[1] end return v end
 ScrollUtil={InitScrollBoxListWithScrollBar=function() end}
 ''')
-for f in ["Proto.lua","Activities.lua","Quests.lua","Core.lua","Scan.lua","Nearby.lua","Widgets.lua","Alert.lua","UI.lua","Minimap.lua","GroupFinderTab.lua"]:
+for f in ["Proto.lua","Activities.lua","Quests.lua","Core.lua","Scan.lua","Nearby.lua","Widgets.lua","Alert.lua","UI.lua","AutoInvite.lua","Minimap.lua","GroupFinderTab.lua"]:
     lua.execute(open(os.path.join(D,f)).read())
 lua.execute(r'''
-OpenGroupDB={} 
+OpenGroupDB={ allLevels = true } 
 OpenGroup.peers={["Bob B"]={shard=55,seen=1000}}
 OpenGroup.listings["Bob B"]={leader="Bob B",seq=1,shard=55,level=56,size=2,hops=0,class="MAGE",need=3,cat=2,acts={30},title="",note="lava run",got=990,via="Bob B"}
 OpenGroup.listings["Lock L"]={leader="Lock L",seq=1,shard=55,level=60,size=1,hops=0,class="WARLOCK",need=0,cat=90001,acts={},price=25000,quest=0,title="Dire Maul",note="have clickers",got=999,via="Lock L"}
@@ -92,7 +92,59 @@ for _, d in ipairs(items) do
   if d.l and d.l.leader == "Cat C" then catTwice = catTwice + 1 end
 end
 assert(nearbyRows == 2, "chat + Group Finder rows should show: " .. nearbyRows)
+-- your level band (58): BRD 52-60 and the summons stay; Fin F (44, no range) and the level 30 quest go
+OpenGroupDB.allLevels = false
+SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+local inBand = {}
+for _, d in ipairs(PROVIDED) do if d.l then inBand[d.l.leader] = true end end
+print("in band:", tostring(inBand["Bob B"]), tostring(inBand["Lock L"]), tostring(inBand["Fin F"]), tostring(inBand["Q Q"]))
+assert(inBand["Bob B"] and inBand["Lock L"] and not inBand["Fin F"] and not inBand["Q Q"], "level band")
+-- grouped by shard, then off; sorted by leader both ways
+OpenGroupDB.allLevels = true
+OpenGroupDB.groupBy = "shard" SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+local heads = {} for _, d in ipairs(PROVIDED) do if d.header then heads[#heads+1] = d.text end end
+print("shard headers:", table.concat(heads, " | "))
+OpenGroupDB.groupBy = "off" OpenGroupDB.sortKey = "leader" OpenGroupDB.sortDesc = true
+SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+local firstName for _, d in ipairs(PROVIDED) do if d.l and not d.match then firstName = d.l.leader break end end
+print("first by leader, reversed:", firstName)
+assert(firstName == "Zed Z", "sort by leader, reversed")
+for _, d in ipairs(PROVIDED) do assert(not d.header or d.header == "matches", "no group headers when grouping is off") end
+OpenGroupDB.groupBy = "act" OpenGroupDB.sortKey = nil OpenGroupDB.sortDesc = nil
+-- the search box filters live: only Zed's post matches "zf"
+local B = OpenGroup_UI.browse
+B.search = "zf" SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+local found = {} for _, d in ipairs(PROVIDED) do if d.l then found[#found+1] = d.l.leader end end
+print("search zf:", table.concat(found, ", "))
+assert(#found == 1 and found[1] == "Zed Z", "search filters rows")
+B.search = ""
+-- the Filter menu builds, and its items set the filters
+local items = {}
+local fake = {}
+function fake:CreateRadio(text, isSel, onSel) items[text] = onSel end
+function fake:CreateCheckbox(text, isSel, onSel) items[text] = onSel end
+function fake:CreateTitle() end
+function fake:CreateDivider() end
+B.buildFilter(fake)
+assert(items["Other shards"] and items["All levels"] and items["Compact rows"] and items["Shard"], "filter menu items")
+items["Other shards"]() assert(OpenGroupDB.where == "other" and B.filtersActive(), "Where from the menu")
+items["All levels"]() assert(OpenGroupDB.allLevels == false, "All levels toggles")
+B.resetFilters() assert(OpenGroupDB.where == "all" and not B.filtersActive(), "reset clears filters")
+OpenGroupDB.allLevels = true
+-- the right-click menu: Ask to Join only for a group with room
+local function keys(list) local k = {} for _, it in ipairs(list) do k[#k+1] = it.key end return table.concat(k, ",") end
+local grp = keys(OpenGroup_UI.personItems("Bob B", OpenGroup.listings["Bob B"]))
+local solo = keys(OpenGroup_UI.personItems("Cat C", OpenGroup.listings["Cat C"]))
+local summ = keys(OpenGroup_UI.personItems("Lock L", OpenGroup.listings["Lock L"]))
+print("menus:", grp, "|", solo, "|", summ)
+assert(grp == "whisper,invite,ask,open,friend,ignore" and solo == "whisper,invite,open,friend,ignore" and summ == solo, "menu items per row")
+assert(#OpenGroup_UI.personItems("Ann A", nil) == 0, "no menu for yourself")
 assert(catTwice == 1, "an OpenGroup user who also posts in chat shows once")
+-- compact rows draw too, and switching back restores the roomy layout
+OpenGroupDB.compact = true SlashCmdList.OPENGROUP("")  SlashCmdList.OPENGROUP("")
+for _, d in ipairs(PROVIDED) do local row = CreateFrame("Button") row.built=false row.data=false row.roles=false INIT(row, d) if d.l then OpenGroupDB.compact = false INIT(row, d) OpenGroupDB.compact = true end end
+SlashCmdList.OPENGROUP("compact")
+print("compact after toggle:", tostring(OpenGroupDB.compact))
 -- list tab
 OpenGroupDB.tab = "list"
 local A = OpenGroup_Activities
@@ -137,5 +189,183 @@ for _, tab in ipairs({"list","network","browse"}) do
 end
 SlashCmdList.OPENGROUP("shard")
 for _,t in ipairs(TICKERS) do t() end
+
+-- auto invite: a group for BRD wants 1 healer (any class) and 1 hunter level 52-54
+INVITED = {} PARTY = {}
+C_PartyInfo = { InviteUnit = function(n) INVITED[#INVITED+1] = n end }
+function UnitInParty(n) return PARTY[n] == true end
+function UnitInRaid() return nil end
+function IsInGroup() return true end
+function UnitIsGroupLeader() return true end
+GetNumGroupMembers = function() local n = 3 for _ in pairs(PARTY) do n = n + 1 end return n end
+OpenGroup.listings = {}
+OpenGroup.nearby = {}
+-- the List tab as a group of 3: two spot chips, the auto invite box and its options popup
+OpenGroupDB.tab = "list" SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+for _,t in ipairs(TICKERS) do t() end
+OpenGroup_AutoInvite.options(UIParent)
+print("list tab as a group ok")
+-- whispers: a conversation, the tab opened on it from Browse's Send Message path
+OpenGroup.addWhisper("hi, room for a mage?", "Bob B", false, CLOCK, false)
+OpenGroup.addWhisper("sure", "Bob B", true, CLOCK, false)
+OpenGroup.onWhisper()
+OpenGroup_UI.whisper("Bob B")
+for _,t in ipairs(TICKERS) do t() end
+print("whispers tab:", OpenGroupDB.tab, "unread", OpenGroup.whisperUnread())
+assert(OpenGroupDB.tab == "whispers" and OpenGroup.whisperUnread() == 0, "opening the conversation reads it")
+-- Browse, solo again: a group with spots shows them, and a hunter 58 fits the "Damage Hunter" spot
+local saveN = GetNumGroupMembers
+GetNumGroupMembers = function() return 0 end
+UnitClass = function() return "Hunter", "HUNTER" end
+OpenGroup.listings["Spot S"] = {leader="Spot S",seq=1,shard=60,level=58,size=3,hops=0,class="PRIEST",need=5,cat=2,acts={30},price=0,quest=0,title="",note="",got=CLOCK,via="Spot S",
+  spots={ OpenGroup_Proto.spot(1, "WARRIOR"), OpenGroup_Proto.spot(4, "HUNTER", 55, 60) }}
+OpenGroupDB.tab = "browse" SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+local shownSpots = false
+for _, d in ipairs(PROVIDED) do if d.l and d.l.leader == "Spot S" then
+  local row = CreateFrame("Button") row.built=false INIT(row, d) row.scripts.OnEnter(row) shownSpots = true
+  print("spot row fit check shown:", tostring(row.fit.shown))
+  assert(row.fit.shown == true, "a level 58 hunter fits Damage Hunter 55-60")
+end end
+assert(shownSpots, "the group with spots is listed")
+OpenGroup.listings["Spot S"] = nil
+UnitClass = function() return "Warlock","WARLOCK" end
+GetNumGroupMembers = saveN
+OpenGroup.post("", "", 0, 2, {30}, nil, nil, { { role = 2 }, { role = 4, class = "HUNTER", min = 52, max = 54 } })
+print("spots sent:", OpenGroup_Proto.spotsText(OpenGroup.mine.spots), "need", OpenGroup.mine.need)
+assert(OpenGroup.mine.need == 6)
+local AI = OpenGroup_AutoInvite
+local c = AI.cfg()
+c.extra = false
+OpenGroup.listings["Mage M"] = {leader="Mage M",seq=1,shard=55,level=53,size=1,hops=0,class="MAGE",need=4,cat=2,acts={30},price=0,quest=0,title="",note="",got=1000}
+OpenGroup.listings["Hunt H"] = {leader="Hunt H",seq=1,shard=55,level=53,size=1,hops=0,class="HUNTER",need=4,cat=2,acts={30},price=0,quest=0,title="",note="",got=1000}
+OpenGroup.listings["Old H"] = {leader="Old H",seq=1,shard=55,level=58,size=1,hops=0,class="HUNTER",need=4,cat=2,acts={30},price=0,quest=0,title="",note="",got=1000}
+OpenGroup.listings["Strat P"] = {leader="Strat P",seq=1,shard=55,level=53,size=1,hops=0,class="PRIEST",need=2,cat=2,acts={31},price=0,quest=0,title="",note="",got=1000}
+OpenGroup.nearby["Heal F"] = {leader="Heal F",src="finder",seq=0,shard=47,level=52,size=1,hops=0,class="PRIEST",need=2,cat=2,acts={30},price=0,quest=0,title="",note="",got=1000}
+AI.start()
+CLOCK = CLOCK + 3 AI.tick()
+CLOCK = CLOCK + 3 AI.tick()
+CLOCK = CLOCK + 3 AI.tick()
+print("auto invited:", table.concat(INVITED, ", "))
+assert(#INVITED == 2, "a hunter and a healer, nobody else")
+local got = {} for _, n in ipairs(INVITED) do got[n] = true end
+assert(got["Hunt H"] and got["Heal F"] and not got["Mage M"] and not got["Old H"] and not got["Strat P"], "filters: class, level, activity")
+-- the hunter joins, the healer never answers: their slot opens again after a minute
+PARTY["Hunt H"] = true
+CLOCK = CLOCK + 70 AI.tick()
+print("joined:", AI.joined["Hunt H"], "| healer declined:", AI.declined["Heal F"] ~= nil, "| need now:", OpenGroup.mine.need)
+assert(AI.joined["Hunt H"] == 4 and AI.declined["Heal F"] and OpenGroup.mine.need == 2)
+-- someone asks to join with the J1 message: a healer, invited at once
+OpenGroup.receive("J1;PRIEST;53;2", "Ask A")
+print("after ask:", INVITED[#INVITED])
+assert(INVITED[#INVITED] == "Ask A")
+PARTY["Ask A"] = true
+CLOCK = CLOCK + 3 AI.tick()
+print("auto on after full:", tostring(AI.on), "| listed:", tostring(OpenGroup.mine ~= nil))
+assert(AI.on == false and OpenGroup.mine == nil, "filled group stops and delists")
+-- invite extras: two open DPS spots, four eligible damage dealers queued: all four invited
+INVITED = {} PARTY = {}
+OpenGroup.listings = {} OpenGroup.nearby = {}
+OpenGroup.post("", "", 4, 2, {30}, nil, nil, { { role = 4 }, { role = 4 } })
+c.extra = true
+for i = 1, 5 do OpenGroup.listings["Dps " .. i] = {leader="Dps " .. i,seq=1,shard=55,level=55,size=1,hops=0,class="ROGUE",need=4,cat=2,acts={30},price=0,quest=0,title="",note="",got=CLOCK} end
+AI.declined = {} AI.asks = {}
+AI.start()
+for i = 1, 6 do CLOCK = CLOCK + 3 AI.tick() end
+print("extras invited:", #INVITED)
+assert(#INVITED == 4, "2 open spots x 2")
+-- one click-only call per click: Refresh searches the Group Finder and skips /who; a tab click only /who
+WHO, SEARCHES = 0, 0
+C_FriendList.SendWho = function() WHO = WHO + 1 end
+C_LFGList.Search = function() SEARCHES = SEARCHES + 1 end
+OpenGroup_Nearby.noSearch = nil
+CLOCK = CLOCK + 1000
+OpenGroup.scan.last, OpenGroup.scan.inFlight = nil, nil
+OpenGroup.scan.auto(true, true)
+print("refresh click: searches", SEARCHES, "who", WHO)
+assert(SEARCHES == 1 and WHO == 0, "one restricted call per click")
+OpenGroup.scan.auto(false)
+assert(SEARCHES == 1 and WHO == 1, "a tab click runs /who only")
+-- an opening click with stale Group Finder results searches once (no /who); with fresh ones, /who
+WHO, SEARCHES = 0, 0
+CLOCK = CLOCK + 1000
+OpenGroup.scan.last, OpenGroup.scan.inFlight = nil, nil
+OpenGroup_Nearby.resultsAt = nil
+OpenGroup.scan.auto(true)
+assert(SEARCHES == 1 and WHO == 0, "stale: the opening click searches, no /who")
+OpenGroup_Nearby.resultsAt = GetTime()
+CLOCK = CLOCK + 10
+OpenGroup.scan.auto(true)
+assert(SEARCHES == 1 and WHO == 1, "fresh: no search, the /who instead")
+-- after a refusal only a direct Search click may try again
+OpenGroup_Nearby.noSearch = true
+CLOCK = CLOCK + 10
+OpenGroup.scan.last = CLOCK
+OpenGroup.scan.auto(true, true)
+assert(SEARCHES == 1, "background attempts stay off after a refusal")
+OpenGroup_UI.browse.searchClick()
+print("explicit search after a refusal:", SEARCHES)
+assert(SEARCHES == 2, "a direct click on Search tries again")
+-- an empty list with stale results offers Search
+OpenGroup.listings, OpenGroup.nearby = {}, {}
+OpenGroup_Nearby.resultsAt = nil
+OpenGroupDB.tab = "browse" SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+print("empty list search button:", tostring(OpenGroup_UI.browse.emptySearch.shown))
+assert(OpenGroup_UI.browse.emptySearch.shown == true, "empty state shows Search")
+-- the List tab: category tiles, then quick picks (recent listings, dungeons for your level)
+local LI = OpenGroup_UI.list
+OpenGroupDB.recent = nil
+OpenGroup.delist()
+OpenGroup.post("", "lava run", 4, 2, {30})
+OpenGroup.delist()
+OpenGroupDB.tab = "list" SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+LI.layoutBanners()
+local titles = {}
+for _, t in ipairs(LI.picks.titles) do if t.shown ~= false then titles[#titles+1] = t.text end end
+print("tiles:", #LI.tiles, "| picks:", table.concat(titles, " / "), "| recent:", #(OpenGroupDB.recent or {}))
+assert(#LI.tiles >= 4, "a tile per category")
+local t1 = LI.tiles[1]
+assert(t1.art and t1.window and t1.atlas, "a tile has its picture, its window and an atlas")
+if t1.cardArt then assert(t1.card and t1.mask, "with the card art: the frame behind, the picture masked to its shape") end
+assert(#(OpenGroupDB.recent or {}) == 1 and OpenGroup.titleOf(OpenGroupDB.recent[1]) == "Blackrock Depths", "the listing is remembered")
+assert(titles[1] == "Your recent listings" and titles[2] == "Good for your level", "both quick pick sections")
+LI.relist(OpenGroupDB.recent[1])
+assert(OpenGroup.mine and OpenGroup.titleOf(OpenGroup.mine) == "Blackrock Depths", "listing again from a recent pick")
+OpenGroup.delist()
+-- pinging yourself sends nothing
+OpenGroup.pings = {}
+OpenGroup.ping("Ann A")
+assert(next(OpenGroup.pings) == nil, "no ping to yourself")
+-- your party's listing: the leader's message lights up a member's OpenGroup; others' are ignored
+local P = OpenGroup_Proto
+OpenGroup.delist()
+IsInGroup = function() return true end
+GetNumGroupMembers = function() return 2 end
+UnitIsGroupLeader = function(u) return u == "party1" end
+UnitExists = function(u) return u == "party1" end
+local saveUnitName = UnitName
+UnitName = function(u) if u == "party1" then return "Lead L" end return "Ann A" end
+local msg = P.groupListing({ leader = "Lead L", seq = 3, shard = 47, level = 55, size = 2, age = 0, hops = 0, class = "PRIEST", need = 4, cat = 2, acts = {30}, title = "", note = "lava", spots = { P.spot(4, "MAGE") } })
+OpenGroup.receiveGroup(msg, "Other O")
+assert(OpenGroup.groupListing == nil, "only the leader's message counts")
+OpenGroup.receiveGroup(msg, "Lead L")
+print("member sees:", OpenGroup.groupListing and OpenGroup.titleOf(OpenGroup.groupListing.l), "minimap lit:", tostring(OpenGroup_Minimap.isLit()), "bar:", tostring(OpenGroup_UI.qbar.shown))
+assert(OpenGroup.groupListing and OpenGroup.groupListing.leader == "Lead L" and OpenGroup_Minimap.isLit() and OpenGroup_UI.qbar.shown, "member gets the listed state")
+OpenGroupDB.tab = "list" SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+OpenGroup.receiveGroup(P.groupUnlisted(4), "Other O")
+assert(OpenGroup.groupListing ~= nil, "a non-leader can't unlist")
+OpenGroup.receiveGroup(P.groupUnlisted(4), "Lead L")
+assert(OpenGroup.groupListing == nil and not OpenGroup_Minimap.isLit(), "unlist clears")
+UnitName = saveUnitName
+IsInGroup = function() return false end
+GetNumGroupMembers = function() return 0 end
+-- whispers: a known peer's class and level
+RAID_CLASS_COLORS.MAGE = { colorStr = "ff3fc7eb" }
+function GetPlayerInfoByGUID() return "Mage", "MAGE" end
+OpenGroup.peers["Mia M"] = { shard = 55, level = 52, seen = CLOCK }
+local c = OpenGroup.addWhisper("hi", "Mia M", false, CLOCK, false)
+OpenGroup.notePerson(c.name, "Player-1-ABC")
+print("whisper person:", OpenGroup.personLine("Mia M"))
+assert(OpenGroup.personLine("Mia M") == "Level 52 MAGE" or OpenGroup.personLine("Mia M") == "Level 52 Mage", "class and level")
+OpenGroup_UI.whisper("Mia M")
 print("smoke OK")
 ''')

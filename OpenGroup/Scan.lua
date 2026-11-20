@@ -56,9 +56,10 @@ function S.click()
 	hush()
 	if C_FriendList.SetWhoToUi then pcall(C_FriendList.SetWhoToUi, true) end
 	local origin = (Enum and Enum.SocialWhoOrigin and Enum.SocialWhoOrigin.Social) or 1
-	local ok, err = pcall(C_FriendList.SendWho, query, origin)
-	if not ok then ok, err = pcall(C_FriendList.SendWho, query) end
-	if not ok then release() L.print("the game refused the search:", tostring(err)) return end
+	-- called directly and once: through pcall the game can't name it if it's refused, and a
+	-- second try in the same click would be refused anyway
+	S.whoAt = GetTime()
+	C_FriendList.SendWho(query, origin)
 	S.inFlight = { query = query, at = GetTime() }
 	S.status = ("Searching levels %s..."):format(query)
 	C_Timer.After(8, function() if S.inFlight then release() S.status = "No answer from the game, click again" if L.onChange then L.onChange() end end end)
@@ -67,11 +68,17 @@ end
 
 -- Any click in OpenGroup (Refresh, a tab, List Group, the minimap button) may run the next search
 -- quietly, at most every 45 seconds, so the network grows while people simply use the window.
-function S.auto()
-	-- the game's Group Finder may only be searched on a click too: same moment, its own pace
-	if OpenGroup_Nearby then pcall(OpenGroup_Nearby.search) end
-	if S.inFlight or (S.last and GetTime() - S.last < 45) then return false end
+-- The Group Finder search and /who are both allowed only inside a click, and the game refuses a
+-- second one in the same click, so a click runs one of them at most. fromClick: the Group Finder
+-- search may run (Refresh and the minimap button only); force: Refresh's shorter wait.
+-- explicit: the player clicked Search (may retry after a refusal); catID: the category to search.
+-- Without force, the Group Finder is only searched when its results are stale (2 minutes).
+function S.auto(fromClick, force, explicit, catID)
+	-- in combat: no searches (the window still opens; a blocked search would pause them all session)
 	if InCombatLockdown and InCombatLockdown() then return false end
+	local N = OpenGroup_Nearby
+	if fromClick and N and (force or N.stale()) and N.search(force, explicit, catID) then return true end
+	if S.noWho or S.inFlight or (S.last and GetTime() - S.last < 45) then return false end
 	S.click()
 	return true
 end

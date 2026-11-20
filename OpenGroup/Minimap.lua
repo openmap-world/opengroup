@@ -1,5 +1,4 @@
--- The minimap button: the Looking For Group eye on the minimap's edge. It turns and glows while
--- you're listed. Left-click opens OpenGroup, right-click the Network tab; drag it around the edge.
+-- The minimap button: the OpenGroup icon on the minimap's edge. It glows while you're listed. Left-click opens OpenGroup, right-click the Network tab; drag it around the edge.
 -- /og minimap hides or shows it.
 local L = OpenGroup
 local M = {}
@@ -18,15 +17,10 @@ b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 b:RegisterForDrag("LeftButton")
 b:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
 
-local bg = b:CreateTexture(nil, "BACKGROUND")
-bg:SetSize(22, 22)
-bg:SetPoint("CENTER", 0, 1)
-bg:SetTexture("Interface\\Minimap\\UI-Minimap-Background")
-
 -- the glow behind it while listed: a soft green star that turns, and a gold ring that breathes
 local glow = b:CreateTexture(nil, "BACKGROUND", nil, -1)
 glow:SetSize(58, 58)
-glow:SetPoint("CENTER", 0, 1)
+glow:SetPoint("CENTER")
 glow:SetTexture("Interface\\Cooldown\\star4")
 glow:SetBlendMode("ADD")
 glow:SetVertexColor(0.4, 1, 0.4, 0.6)
@@ -36,20 +30,15 @@ spin:SetLooping("BOUNCE")
 local r = spin:CreateAnimation("Alpha") r:SetFromAlpha(0.9) r:SetToAlpha(0.25) r:SetDuration(2.2) r:SetSmoothing("IN_OUT")
 glow:Hide()
 
-local eye = b:CreateTexture(nil, "ARTWORK")
-eye:SetSize(22, 22)
-eye:SetPoint("CENTER", 0, 1)
-eye:SetTexture("Interface\\LFGFrame\\LFG-Eye")
-eye:SetTexCoord(0, 0.125, 0, 0.25)
-
-local border = b:CreateTexture(nil, "OVERLAY")
-border:SetSize(54, 54)
-border:SetPoint("TOPLEFT")
-border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+-- the icon has its own gold ring, so it goes on without the usual minimap frame
+local icon = b:CreateTexture(nil, "ARTWORK")
+icon:SetSize(31, 31)
+icon:SetPoint("CENTER")
+icon:SetTexture(L.ICON)
 
 local ring = b:CreateTexture(nil, "OVERLAY", nil, 1)
 ring:SetSize(40, 40)
-ring:SetPoint("CENTER", 0, 1)
+ring:SetPoint("CENTER")
 ring:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
 ring:SetBlendMode("ADD")
 ring:SetVertexColor(1, 0.82, 0.25)
@@ -78,11 +67,10 @@ b:SetScript("OnUpdate", function(_, el)
 			place()
 		end
 	end
-	if L.mine and AnimateTexCoords then pcall(AnimateTexCoords, eye, 512, 256, 64, 64, 29, el, 0.08) end
 end)
 
 b:SetScript("OnClick", function(_, button)
-	if L.scan and L.scan.auto then L.scan.auto() end
+	if L.scan and L.scan.auto then L.scan.auto(true) end
 	if not OpenGroup_UI then return end
 	if button == "RightButton" then OpenGroup_UI.toggle("network") else OpenGroup_UI.toggle() end
 end)
@@ -90,6 +78,9 @@ end)
 b:SetScript("OnEnter", function(self)
 	GameTooltip:SetOwner(self, "ANCHOR_LEFT")
 	GameTooltip:SetText("OpenGroup")
+	if not L.mine and L.groupListing then
+		GameTooltip:AddLine(("Your group is listed for %s (by %s)"):format(L.titleOf(L.groupListing.l), L.groupListing.leader), 0.25, 1, 0.25, true)
+	end
 	if L.mine then
 		GameTooltip:AddLine("Listed: " .. L.titleOf(L.mine), 0.25, 1, 0.25)
 		local sec = time() - L.mine.at
@@ -106,17 +97,20 @@ b:SetScript("OnEnter", function(self)
 end)
 b:SetScript("OnLeave", GameTooltip_Hide)
 
+function M.isLit() return glow:IsShown() end
+
 function M.update()
-	local on = L.mine ~= nil
+	-- listed: our own listing, or our party leader's
+	local on = L.mine ~= nil or L.groupListing ~= nil
 	glow:SetShown(on) ring:SetShown(on)
-	if on then spin:Play() breathe:Play() else spin:Stop() breathe:Stop() eye:SetTexCoord(0, 0.125, 0, 0.25) end
+	if on then spin:Play() breathe:Play() else spin:Stop() breathe:Stop() end
 	b:SetShown(not db().hide)
 end
 
 -- a bright pulse when someone new fits your listing
 local flash = b:CreateTexture(nil, "OVERLAY", nil, 2)
 flash:SetSize(64, 64)
-flash:SetPoint("CENTER", 0, 1)
+flash:SetPoint("CENTER")
 flash:SetTexture("Interface\\Cooldown\\star4")
 flash:SetBlendMode("ADD")
 flash:SetVertexColor(1, 0.85, 0.3)

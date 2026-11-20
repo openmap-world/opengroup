@@ -18,9 +18,24 @@ A.info = {}          -- [activityID] = { id, name, short, min, max, cat }
 
 local function api() return C_LFGList and C_LFGList.GetAvailableCategories and C_LFGList.GetAvailableActivities end
 
-function A.load()
-	if A.categories then return A.categories end
+local function infoFrom(aid, t, cid)
+	return { id = aid, name = t.fullName, short = (t.shortName ~= "" and t.shortName) or t.fullName,
+		min = t.minLevelSuggestion or t.minLevel or 0, max = t.maxLevelSuggestion or t.maxLevel or 0, cat = cid or t.categoryID }
+end
+
+-- The game only has its Group Finder data once Blizzard's Group Finder has loaded, a moment after
+-- login. Until then A.load hands out the built-in list (A.fallback) and tries again on later calls
+-- and on the events at the bottom; A.onReload runs once the real list is in.
+A.fallback = nil
+local triedAt
+local function now() return GetTime and GetTime() or 0 end
+
+function A.load(force)
+	if A.categories and not A.fallback then return A.categories end
+	if A.categories and not force and triedAt and now() - triedAt < 2 then return A.categories end
+	triedAt = now()
 	local cats = {}
+	local info = {}
 	if api() then
 		local ok, ids = pcall(C_LFGList.GetAvailableCategories)
 		for _, cid in ipairs(ok and type(ids) == "table" and ids or {}) do
@@ -31,14 +46,13 @@ function A.load()
 				for _, aid in ipairs(acts) do
 					local okT, t = pcall(C_LFGList.GetActivityInfoTable, aid)
 					if okT and type(t) == "table" and type(t.fullName) == "string" then
-						A.info[aid] = { id = aid, name = t.fullName, short = (t.shortName ~= "" and t.shortName) or t.fullName,
-							min = t.minLevelSuggestion or t.minLevel or 0, max = t.maxLevelSuggestion or t.maxLevel or 0, cat = cid }
+						info[aid] = infoFrom(aid, t, cid)
 						c.acts[#c.acts + 1] = aid
 					end
 				end
 				-- highest level first, as the game's own list orders them
 				table.sort(c.acts, function(a, b)
-					local x, y = A.info[a], A.info[b]
+					local x, y = info[a], info[b]
 					if x.min ~= y.min then return x.min > y.min end
 					if x.max ~= y.max then return x.max > y.max end
 					return x.name < y.name
@@ -49,22 +63,31 @@ function A.load()
 			end
 		end
 	end
+	local wasFallback = A.fallback
 	if #cats == 0 then
-		-- no Group Finder data: the built-in list, negative ids that never go on the wire
+		-- no Group Finder data (yet): the built-in list, negative ids that never go on the wire
+		if A.categories then return A.categories end
+		A.fallback = true
 		local n = 0
 		for _, fc in ipairs(FALLBACK) do
 			local c = { id = fc.id, name = fc.name, acts = {}, fallback = true }
 			for _, name in ipairs(fc.acts) do
 				n = n - 1
-				A.info[n] = { id = n, name = name, short = name, min = 0, max = 0, cat = fc.id }
+				info[n] = { id = n, name = name, short = name, min = 0, max = 0, cat = fc.id }
 				c.acts[#c.acts + 1] = n
 			end
 			cats[#cats + 1] = c
 		end
+	else
+		A.fallback = nil
 	end
+	-- activities looked up one at a time (A.name) stay known
+	for id, i in pairs(A.info) do if id > 0 and not info[id] then info[id] = i end end
+	A.info = info
 	-- warlock summons: our own category, no activities, always last
 	cats[#cats + 1] = { id = OpenGroup_Proto.SUMMON_CAT, name = "Warlock Summons", acts = {}, summon = true }
 	A.categories = cats
+	if wasFallback and not A.fallback and A.onReload then pcall(A.onReload) end
 	return cats
 end
 
@@ -93,7 +116,20 @@ function A.spots(text)
 	return out
 end
 
-function A.name(id) local i = A.info[id] return i and i.name end
+-- An activity's info, asking the game for one it didn't list for this character (another
+-- player's listing can name any activity).
+function A.get(id)
+	local i = A.info[id]
+	if i or type(id) ~= "number" or id <= 0 or not (C_LFGList and C_LFGList.GetActivityInfoTable) then return i end
+	local ok, t = pcall(C_LFGList.GetActivityInfoTable, id)
+	if ok and type(t) == "table" and type(t.fullName) == "string" and t.fullName ~= "" then
+		i = infoFrom(id, t)
+		A.info[id] = i
+	end
+	return i
+end
+
+function A.name(id) local i = A.get(id) return i and i.name end
 
 -- "Blackrock Depths", "BRD", "black" all find Blackrock Depths. Initials count too.
 local function initials(s)
@@ -130,7 +166,7 @@ end
 
 -- Is the activity right for this level? (the suggested range, when there is one)
 function A.fits(id, level)
-	local i = A.info[id]
+	local i = A.get(id)
 	if not i then return true end
 	return not ((i.min > 0 and level < i.min - 3) or (i.max > 0 and level > i.max + 3))
 end
@@ -138,7 +174,7 @@ end
 -- The Group Finder's colouring: by the activity's lowest suggested level against yours
 -- (red / orange / yellow / green / grey), using the game's quest difficulty colours.
 function A.levelColor(id, level)
-	local i = A.info[id]
+	local i = A.get(id)
 	if not i or (i.min or 0) <= 0 then return "|cffffd100" end
 	local c = GetQuestDifficultyColor and GetQuestDifficultyColor(i.min)
 	if c then return ("|cff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255) end
@@ -149,14 +185,27 @@ function A.levelColor(id, level)
 end
 
 function A.range(id)
-	local i = A.info[id]
+	local i = A.get(id)
 	if not i or (i.min or 0) <= 0 or (i.max or 0) <= 0 then return "" end
 	return ("(%d - %d)"):format(i.min, i.max)
 end
 
 function A.label(id)
-	local i = A.info[id]
+	local i = A.get(id)
 	if not i then return "?" end
 	if i.min > 0 and i.max > 0 and i.max ~= i.min then return ("%s  |cff8f8f8f%d-%d|r"):format(i.name, i.min, i.max) end
 	return i.name
+end
+
+-- try again for the real list when Blizzard's Group Finder loads or the game says it changed
+if CreateFrame then
+	local f = CreateFrame("Frame")
+	for _, ev in ipairs({ "PLAYER_ENTERING_WORLD", "ADDON_LOADED", "LFG_LIST_AVAILABILITY_UPDATE" }) do pcall(f.RegisterEvent, f, ev) end
+	f:SetScript("OnEvent", function(_, ev, name)
+		if ev == "ADDON_LOADED" and not (type(name) == "string" and name:find("^Blizzard_")) then return end
+		if ev == "PLAYER_ENTERING_WORLD" and C_LFGList and C_LFGList.RequestAvailableActivities then pcall(C_LFGList.RequestAvailableActivities) end
+		if A.categories and not A.fallback then f:UnregisterAllEvents() return end
+		A.load(true)
+		if not A.fallback then f:UnregisterAllEvents() end
+	end)
 end

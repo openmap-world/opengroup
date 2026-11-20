@@ -24,6 +24,12 @@ function Q.log()
 	return out
 end
 
+-- the quest's level when it's on our log; nil otherwise
+function Q.level(id)
+	for _, q in ipairs(Q.log()) do if q.id == id then return (q.level or 0) > 0 and q.level or nil end end
+	return nil
+end
+
 function Q.onLog(id)
 	if not id or id <= 0 then return false end
 	if C_QuestLog and C_QuestLog.IsOnQuest then

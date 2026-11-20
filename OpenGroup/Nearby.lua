@@ -249,8 +249,14 @@ end
 
 local waitingCat   -- the category of the search we sent, until its results arrive
 
+-- when the last Group Finder results came in (from our search or anyone else's, the game's own
+-- window or another addon): older than 2 minutes counts as stale
+N.resultsAt = nil
+function N.stale() return not N.resultsAt or GetTime() - N.resultsAt > 120 end
+
 function N.readFinder()
 	if not enabled() or not C_LFGList then return end
+	N.resultsAt = GetTime()
 	local get = C_LFGList.GetFilteredSearchResults or C_LFGList.GetSearchResults
 	if not get then return end
 	local ok, total, ids = pcall(get)
@@ -298,22 +304,31 @@ local function nextCategory()
 end
 
 local lastSearch = -SEARCH_GAP
--- The game allows a Group Finder search only from a click, so this runs from OpenGroup's clicks.
-function N.search(force)
-	if not enabled() or not (C_LFGList and C_LFGList.Search) then return false end
+N.searchAt = nil   -- GetTime() of our last search call, to tell a blocked search from anything else
+-- The game allows a Group Finder search only inside a click (a hardware event), so this is only
+-- called straight from OpenGroup's click handlers (Scan.auto(true), Refresh). It calls the game's
+-- function directly, once, with the signature the game's own window uses: not through pcall and
+-- with no second try, since a second call in the same click is refused.
+-- explicit: the player clicked Search themselves; that may try again even after the game refused
+-- a search earlier this session, and even with the game's own window open. catID: search this
+-- category (the one Browse is filtered to) instead of taking turns.
+function N.search(force, explicit, catID)
+	if not enabled() or (N.noSearch and not explicit) or not (C_LFGList and C_LFGList.Search) then return false end
 	local t = GetTime()
 	if t - lastSearch < (force and 5 or SEARCH_GAP) then return false end
-	-- leave the game's own list alone while the player has it open
-	if LFGParentFrame and LFGParentFrame.IsShown and LFGParentFrame:IsShown() then return false end
-	local c = nextCategory()
+	-- leave the game's own list alone while the player has it open (unless they asked)
+	if not explicit and LFGParentFrame and LFGParentFrame.IsShown and LFGParentFrame:IsShown() then return false end
+	local c = catID and A.category and A.category(catID)
+	if not (c and not c.fallback and c.id > 0 and #c.acts > 0 and not c.summon) then c = nextCategory() end
 	if not c then return false end
 	lastSearch = t
 	waitingCat = c.id
 	N.stats.searches = N.stats.searches + 1
-	local ok = pcall(C_LFGList.Search, c.id, 0, 0, nil, false, nil, c.acts)
-	if not ok then ok = pcall(C_LFGList.Search, c.id, c.acts) end
-	if not ok then waitingCat = nil end
-	return ok
+	N.searchAt = t
+	-- which click it came from, for /og status if the game blocks it
+	N.searchFrom = debugstack and debugstack(2, 4, 0) or nil
+	C_LFGList.Search(c.id, 0, 0, nil, false, nil, c.acts)
+	return true
 end
 
 -- --------------------------------------------------------------------------------------------
@@ -355,6 +370,8 @@ f:RegisterEvent("CHAT_MSG_CHANNEL")
 f:RegisterEvent("LFG_LIST_SEARCH_RESULTS_RECEIVED")
 f:RegisterEvent("LFG_LIST_SEARCH_RESULT_UPDATED")
 f:RegisterEvent("LFG_LIST_SEARCH_FAILED")
+f:RegisterEvent("ADDON_ACTION_BLOCKED")
+f:RegisterEvent("ADDON_ACTION_FORBIDDEN")
 f:SetScript("OnEvent", function(_, ev, ...)
 	if ev == "CHAT_MSG_CHANNEL" then
 		local text, author, _, chanName, _, _, _, _, baseName, _, _, guid = ...
@@ -365,6 +382,32 @@ f:SetScript("OnEvent", function(_, ev, ...)
 		pcall(N.readOne, (...))
 	elseif ev == "LFG_LIST_SEARCH_FAILED" then
 		waitingCat = nil
+	elseif ev == "ADDON_ACTION_BLOCKED" or ev == "ADDON_ACTION_FORBIDDEN" then
+		-- "Interface action failed because of an AddOn": say what the game refused, and if it was
+		-- our Group Finder search, stop searching for this session (chat rows keep coming)
+		-- the event fires for every addon: only ours counts, and it's said once a session
+		local who, what = ...
+		if who == "OpenGroup" then
+			N.blocked = tostring(what or "?")
+			N.blockedCount = (N.blockedCount or 0) + 1
+			-- right after one of our two click-only calls: that call. The most recent one wins.
+			local S, t = L.scan, GetTime()
+			local whoRecent = S and S.whoAt and t - S.whoAt <= 0.5
+			local searchRecent = N.searchAt and t - N.searchAt <= 0.5
+			if N.blocked:find("SendWho") or (whoRecent and (not searchRecent or S.whoAt >= N.searchAt)) then
+				N.blocked = "C_FriendList.SendWho"
+				if S and not S.noWho then L.print("the game didn't allow OpenGroup's /who search, so it won't run it again this session.") end
+				if S then S.noWho = true end
+			elseif N.blocked:find("Search") or searchRecent then
+				N.blocked = "C_LFGList.Search"
+				N.blockedAfter = N.searchAt and (GetTime() - N.searchAt) or nil
+				N.blockedFrom = N.searchFrom
+				if not N.noSearch then L.print("the game didn't allow OpenGroup's Group Finder search, so it won't search again this session. Groups from chat and other OpenGroup players still show.") end
+				N.noSearch = true
+			elseif N.blockedCount == 1 then
+				L.print(("the game blocked an action (%s) and named OpenGroup. /og status shows it again."):format(N.blocked))
+			end
+		end
 	end
 end)
 

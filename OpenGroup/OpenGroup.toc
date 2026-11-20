@@ -2,13 +2,14 @@
 ## Title: |cffe6b85cOpen|rGroup
 ## Notes: Find groups on every shard, not just your own. /og
 ## Author: OpenGroup contributors
-## IconTexture: Interface\Icons\INV_Misc_GroupNeedMore
-## Version: 0.6.0-test
+## IconTexture: Interface\AddOns\OpenGroup\Media\icon
+## Version: 0.6.0-beta
 ## SavedVariables: OpenGroupDB
 ## Category: Group Finder
 ## X-Category: Chat & Communication
 ## X-License: MIT
 ## X-Website: https://github.com/openmap-world/opengroup
+## X-Curse-Project-ID: 1818236
 
 Proto.lua
 Activities.lua
@@ -19,5 +20,6 @@ Nearby.lua
 Widgets.lua
 Alert.lua
 UI.lua
+AutoInvite.lua
 Minimap.lua
 GroupFinderTab.lua

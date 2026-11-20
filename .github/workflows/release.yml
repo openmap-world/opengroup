@@ -1,0 +1,70 @@
+name: release
+# A version tag (v0.6.0-beta ...) builds the zip (tools/package/build.py: the OpenGroup/ folder as
+# committed, after the offline tests) and makes the GitHub release with it, as a pre-release when the
+# tag has -beta or -alpha in it. CurseForge only gets it when the "curseforge" job is started by hand
+# (Actions > release > Run workflow, with the tag) and approved in the "curseforge" environment: a tag
+# alone never reaches CurseForge (docs/releasing.md).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The release's tag, already pushed (v0.6.0-beta): upload its zip to CurseForge"
+        required: true
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write             # the GitHub release and its zip
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install lupa
+      # (the offline tests run inside build.py)
+      - run: python -P tools/package/build.py "$TAG"
+      - name: GitHub release
+        if: github.event_name == 'push'
+        run: |
+          pre=""; case "$TAG" in *-alpha*|*-beta*) pre="--prerelease";; esac
+          gh release create "$TAG" $pre --title "OpenGroup $TAG" \
+            --notes-file "dist/OpenGroup-$TAG-changelog.md" "dist/OpenGroup-$TAG.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+  curseforge:
+    # only by hand, and only once approved: the "curseforge" environment (Settings > Environments) must
+    # list the maintainer as a required reviewer. Needs the CF_API_KEY secret and the toc's
+    # X-Curse-Project-ID (not set until the CurseForge project exists).
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: curseforge
+    env:
+      TAG: ${{ inputs.tag }}
+      CF_API_KEY: ${{ secrets.CF_API_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - run: python -P tools/package/curseforge.py "$TAG" --dry-run
+      - run: python -P tools/package/curseforge.py "$TAG"

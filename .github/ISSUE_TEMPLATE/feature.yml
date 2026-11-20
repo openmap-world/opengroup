@@ -1,0 +1,11 @@
+name: Idea
+description: Something you'd like OpenGroup to do
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: Describe how you'd use it in game.
+    validations:
+      required: true

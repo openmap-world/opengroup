@@ -218,7 +218,8 @@ function Alert.next()
 	frame.name:SetText(item.name or "")
 	paintEmblem(frame, item)
 	if item.atlas then frame.icon:SetAtlas(item.atlas) frame.icon:SetTexCoord(0, 1, 0, 1)
-	else frame.icon:SetTexture(item.icon or "Interface\\Icons\\INV_Misc_GroupNeedMore") frame.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93) end
+	elseif not item.icon or item.icon == OpenGroup.ICON then frame.icon:SetTexture(OpenGroup.ICON) frame.icon:SetTexCoord(0, 1, 0, 1)
+	else frame.icon:SetTexture(item.icon) frame.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93) end
 	if frame.icon.SetDesaturated then frame.icon:SetDesaturated(item.grey == true) end
 	if frame.flag then local t = item.tint or { 0.18, 0.42, 0.12 } frame.flag:SetVertexColor(t[1], t[2], t[3]) end
 	frame.left = item.hold or HOLD

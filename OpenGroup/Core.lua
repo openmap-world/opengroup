@@ -3,6 +3,11 @@ local P = OpenGroup_Proto
 local L = {}
 OpenGroup = L
 
+-- the addon's own icon (gold ring, a cross over a party)
+L.ICON = "Interface\\AddOns\\OpenGroup\\Media\\icon"
+-- the same art without its gold ring, for square spots (a tab on the game's window)
+L.ICON_SQUARE = "Interface\\AddOns\\OpenGroup\\Media\\icon-square"
+
 L.VERSION = P.VERSION
 L.peers = {}        -- [name] = { shard, level, seen }   OpenGroup users we can whisper (saved)
 L.listings = {}     -- [leader] = { leader, seq, shard, level, size, title, note, hops, got, age, via }
@@ -61,7 +66,7 @@ function L.titleOf(l)
 		if first then return ("%s +%d"):format(first, #acts - 1) end
 	end
 	if l.title and l.title ~= "" then return l.title end
-	return #acts > 0 and (#acts .. " activities") or "?"
+	return #acts == 1 and "1 activity" or #acts > 1 and (#acts .. " activities") or "?"
 end
 
 -- Our shard: the number the game puts after Trade / LookingForGroup ("Trade 47"). Where it sits
@@ -309,6 +314,10 @@ function L.receive(msg, sender)
 			store(d, sender)
 			relay(d, sender)
 		end
+	elseif kind == "J1" then
+		if L.onJoinRequest then pcall(L.onJoinRequest, sender, d) end
+	elseif kind == "I1" then
+		L.print(("%s's auto invite just invited you%s."):format(L.short(sender), d.title ~= "" and (" for " .. d.title) or ""))
 	elseif kind == "U1" then
 		local held = L.listings[d.leader] or L.listings[sender]
 		if held and d.seq >= held.seq then
@@ -333,10 +342,42 @@ function L.mineForSend()
 	return { leader = L.me(), seq = m.seq, shard = L.shard(), level = UnitLevel("player"),
 		size = math.max(1, GetNumGroupMembers()), age = 0, hops = 0,
 		class = select(2, UnitClass("player")) or "", need = m.need or 0, cat = m.cat or 0, acts = m.acts or {}, price = m.price or 0, quest = m.quest or 0,
-		title = m.title, note = m.note }
+		title = m.title, note = m.note, spots = m.spots }
 end
 
 local announceAt = 1
+-- change the roles a listing still wants (auto invite, as people join) without a new listing
+function L.setNeed(need)
+	need = P.int(need, 0, 7) or 0
+	if not L.mine or L.mine.need == need then return end
+	OpenGroupDB.seq = (OpenGroupDB.seq or 0) + 1
+	L.mine.need, L.mine.seq = need, OpenGroupDB.seq
+	L.announce()
+	if L.onChange then L.onChange() end
+end
+
+-- change the open spots (auto invite fills them, the group grows) without a new listing
+function L.setSpots(spots)
+	if not L.mine then return end
+	local clean = {}
+	-- tidied in place: auto invite holds on to these tables for its pending invites
+	for _, sp in ipairs(spots or {}) do
+		if #clean < P.MAX_SPOTS and type(sp) == "table" then
+			local n = P.spot(sp.role, sp.class, sp.min, sp.max)
+			sp.role, sp.class, sp.min, sp.max = n.role, n.class, n.min, n.max
+			clean[#clean + 1] = sp
+		end
+	end
+	-- (auto invite edits the spots in place, so compare with what was last sent)
+	local text = P.spotsText(clean)
+	if text == L.mine.spotsSent then return end
+	OpenGroupDB.seq = (OpenGroupDB.seq or 0) + 1
+	L.mine.spots, L.mine.seq, L.mine.spotsSent = clean, OpenGroupDB.seq, text
+	if #clean > 0 then L.mine.need = P.needOfSpots(clean) end
+	L.announce()
+	if L.onChange then L.onChange() end
+end
+
 function L.announce()
 	if not L.mine then return end
 	local names = {}
@@ -353,7 +394,8 @@ end
 
 -- need: bits of P.TANK / P.HEALER / P.DAMAGE. acts: Group Finder activity ids (the game's, > 0);
 -- a title is free text for Custom, or for a client without Group Finder data. Returns true when listed.
-function L.post(title, note, need, cat, acts, price, quest)
+-- spots: the group's open spots (P.spot), or nil; when given, need comes from them
+function L.post(title, note, need, cat, acts, price, quest, spots)
 	title = P.clean(title, P.TITLE_LEN)
 	local ids = {}
 	for _, id in ipairs(type(acts) == "table" and acts or {}) do
@@ -366,9 +408,12 @@ function L.post(title, note, need, cat, acts, price, quest)
 	if title == "" and #ids == 0 then L.print("pick a dungeon or type what you're doing first.") return false end
 	OpenGroupDB.seq = (OpenGroupDB.seq or 0) + 1
 	local first = L.mine == nil
-	L.mine = { title = title, note = P.clean(note or "", P.NOTE_LEN), need = P.int(need, 0, 7) or 0,
+	local sp = {}
+	for _, x in ipairs(type(spots) == "table" and spots or {}) do if #sp < P.MAX_SPOTS then sp[#sp + 1] = P.spot(x.role, x.class, x.min, x.max) end end
+	if #sp > 0 then need = P.needOfSpots(sp) end
+	L.mine = { title = title, note = P.clean(note or "", P.NOTE_LEN), need = P.int(need, 0, 7) or 0, spots = sp,
 		cat = P.int(cat, 0, 99999) or 0, acts = ids, price = P.int(price, 0, P.MAX_PRICE) or 0, quest = quest,
-		seq = OpenGroupDB.seq, at = first and now() or L.mine.at }
+		seq = OpenGroupDB.seq, at = first and now() or L.mine.at, spotsSent = P.spotsText(sp) }
 	if L.onListed then L.onListed(first) end
 	L.announce()
 	if first then
@@ -405,6 +450,8 @@ function L.blizzardTitle()
 end
 
 function L.ping(name)
+	-- a hidden whisper to yourself never goes out, so there'd be nothing to answer
+	if L.isMe(name) then L.print("that's you: target another player who runs OpenGroup to test the connection.") return end
 	local token = tostring(math.random(100000, 999999))
 	L.pings[token] = { to = name, at = GetTime() }
 	L.send(name, P.ping(token))
@@ -587,10 +634,526 @@ f:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4, ...)
 		local ok, err = pcall(L.receive, a2, a4)
 		if not ok then L.stats.bad = L.stats.bad + 1 L.lastError = err end
 	elseif ev == "CHAT_MSG_ADDON" and a1 == P.PREFIX and (a3 == "GUILD" or a3 == "PARTY" or a3 == "RAID") then
-		-- only hellos travel on these; the answer goes back as a whisper like any other
+		-- only hellos travel on these (the answer goes back as a whisper like any other), and on
+		-- PARTY / RAID the leader's group listing
 		if type(a2) == "string" and a2:sub(1, 3) == "H1;" then
 			local ok, err = pcall(L.receive, a2, a4)
+			if not ok then L.stats.bad = L.stats.bad + 1 L.lastError = err end
+		elseif type(a2) == "string" and a3 ~= "GUILD" and a2:sub(1, 1) == "G" and L.receiveGroup then
+			local ok, err = pcall(L.receiveGroup, a2, a4)
 			if not ok then L.stats.bad = L.stats.bad + 1 L.lastError = err end
 		end
 	end
 end)
+
+-- --------------------------------------------------------------------------------------------
+-- Browse rows: one shape for every source (OpenGroup on another shard or yours, the game's Group
+-- Finder, LFG chat), and the filtering, sorting, grouping and column layout Browse uses. Pure
+-- functions (no frames), so tools/test.py can run them.
+
+local function hasBit(bits, b) return (bits or 0) % (b * 2) >= b end
+
+-- where: "other" (OpenGroup, another shard), "mine" (OpenGroup, your shard), "finder", "chat"
+function L.rowOf(l, myShard)
+	local A, Q = OpenGroup_Activities, OpenGroup_Quests
+	local r = { l = l, leader = l.leader or "?", class = l.class, level = l.level or 0, size = l.size or 1,
+		need = l.need or 0, spots = l.spots, note = l.note or "", got = l.got or 0, shard = l.shard or 0, cat = l.cat or 0 }
+	r.where = l.src == "finder" and "finder" or l.src == "chat" and "chat" or (l.shard == myShard and "mine" or "other")
+	r.kind = l.cat == P.SUMMON_CAT and "summon" or P.isBGQ(l.cat) and "bgq" or (r.size > 1 and "group" or "player")
+	-- the activity: the first one we know names it; the level range covers all of them
+	local min, max
+	for _, id in ipairs(l.acts or {}) do
+		local i = A and A.get and A.get(id)
+		if i then
+			r.act = r.act or id
+			if (i.min or 0) > 0 then min = math.min(min or i.min, i.min) end
+			if (i.max or 0) > 0 then max = math.max(max or i.max, i.max) end
+		end
+	end
+	if (l.quest or 0) > 0 then
+		local ql = Q and Q.level and Q.level(l.quest)
+		if ql then min, max = ql, ql end
+	end
+	r.min, r.max = min or 0, max or 0
+	r.title = L.titleOf(l)
+	if r.kind == "summon" then r.groupKey, r.groupName = "summon", "Warlock Summons"
+	elseif r.kind == "bgq" then r.groupKey, r.groupName = "bgq", "Battleground Queues"
+	elseif r.act then r.groupKey, r.groupName = "a" .. r.act, (A and A.name(r.act)) or r.title
+	else r.groupKey, r.groupName = "t" .. tostring(r.title):lower(), r.title end
+	return r
+end
+
+-- Is it in the player's level band? An activity's range with 3 levels of slack either side; with
+-- no range (custom, a quest not on our log, chat without a dungeon), the leader within 5 levels.
+function L.inBand(r, lvl)
+	if r.kind == "summon" then return true end
+	if r.min > 0 or r.max > 0 then
+		return (r.min == 0 or lvl >= r.min - 3) and (r.max == 0 or lvl <= r.max + 3)
+	end
+	return r.level == 0 or math.abs(r.level - lvl) <= 5
+end
+
+-- how far it is from the player's level (0 inside the range)
+function L.levelDistance(r, lvl)
+	if r.min > 0 or r.max > 0 then
+		if r.min > 0 and lvl < r.min then return r.min - lvl end
+		if r.max > 0 and lvl > r.max then return lvl - r.max end
+		return 0
+	end
+	if r.level > 0 then return math.abs(r.level - lvl) end
+	return 10
+end
+
+-- me = { class, level, roles (bits, 0 = by class), grouped, need (our listing's need bits) }
+-- fit: we'd fill a spot or role in their group, or (as a leader) they bring a role we want.
+-- dim: a group we can't join (full, or wanting nothing we play), shown last and greyed.
+function L.rowFit(r, me)
+	local roles = (me.roles and me.roles > 0) and me.roles or (P.CLASS_ROLES[me.class or ""] or 7)
+	if r.kind == "group" and not me.grouped then
+		if r.size >= 5 then return false, true end
+		if type(r.spots) == "table" and #r.spots > 0 then
+			local ok = P.bestSpot(r.spots, me.class, me.level, roles) ~= nil
+			return ok, not ok
+		end
+		local want = r.need > 0 and r.need or 7
+		for _, b in ipairs({ 1, 2, 4 }) do if hasBit(want, b) and hasBit(roles, b) then return true, false end end
+		return false, true
+	end
+	if r.kind == "player" and me.grouped and (me.need or 0) > 0 then
+		for _, b in ipairs({ 1, 2, 4 }) do if hasBit(me.need, b) and hasBit(r.need, b) then return true, false end end
+	end
+	return false, false
+end
+
+local WHERE_ORDER = { other = 1, mine = 2, finder = 3, chat = 4 }
+function L.whereOK(r, where)
+	if not where or where == "all" then return true end
+	if where == "og" then return r.where == "other" or r.where == "mine" end
+	return r.where == where
+end
+
+local function bits(n) local c = 0 for _, b in ipairs({ 1, 2, 4 }) do if hasBit(n, b) then c = c + 1 end end return c end
+local function needCount(r) return (type(r.spots) == "table" and #r.spots > 0) and #r.spots or bits(r.need) end
+
+-- relevance: groups we can't join last, then ones we fit, then nearest our level, then newest
+local function relevance(a, b)
+	if (a.dim or false) ~= (b.dim or false) then return not a.dim end
+	if (a.fit or false) ~= (b.fit or false) then return a.fit == true end
+	if a.dist ~= b.dist then return a.dist < b.dist end
+	if a.got ~= b.got then return a.got > b.got end
+	return a.leader < b.leader
+end
+L.SORT_KEYS = {
+	lvl = function(r) return r.level end,
+	leader = function(r) return r.leader:lower() end,
+	act = function(r) return tostring(r.groupName or r.title):lower() end,
+	levels = function(r) return r.min > 0 and r.min or 999 end,
+	size = function(r) return r.size end,
+	needs = function(r) return needCount(r) end,
+	where = function(r) return WHERE_ORDER[r.where] * 100000 + (r.where == "other" and r.shard or 0) end,
+	age = function(r) return -r.got end,
+}
+-- rows need dist (L.levelDistance) set; key nil = relevance
+function L.sortRows(rows, key, desc)
+	local f = key and L.SORT_KEYS[key]
+	table.sort(rows, function(a, b)
+		if f then
+			local x, y = f(a), f(b)
+			if x ~= y then if desc then return x > y end return x < y end
+		end
+		return relevance(a, b)
+	end)
+	return rows
+end
+
+-- by = "act" | "shard" | anything else (no groups). Returns { { key, text, rows, dist, min, max } }
+-- in order: activities nearest our level first (then the busiest), shards in Where order.
+function L.groupRows(rows, by)
+	if by ~= "act" and by ~= "shard" then return nil end
+	local groups, index = {}, {}
+	for _, r in ipairs(rows) do
+		local key, text
+		if by == "act" then key, text = r.groupKey, r.groupName
+		else
+			key = r.where == "other" and ("s" .. r.shard) or r.where
+			text = r.where == "other" and ("Shard " .. r.shard) or r.where == "mine" and "Your shard" or r.where == "finder" and "Group Finder" or "LFG chat"
+		end
+		local g = index[key]
+		if not g then
+			g = { key = key, text = text, rows = {}, dist = r.dist or 0, min = r.min, max = r.max, order = (WHERE_ORDER[r.where] or 9) * 100000 + (r.where == "other" and r.shard or 0) }
+			index[key] = g
+			groups[#groups + 1] = g
+		end
+		g.rows[#g.rows + 1] = r
+		if (r.dist or 0) < g.dist then g.dist = r.dist end
+	end
+	table.sort(groups, function(a, b)
+		if by == "shard" then return a.order < b.order end
+		if a.dist ~= b.dist then return a.dist < b.dist end
+		if #a.rows ~= #b.rows then return #a.rows > #b.rows end
+		return tostring(a.text) < tostring(b.text)
+	end)
+	return groups
+end
+
+-- Browse's saved settings, moved to the 0.6 ones: Where replaces "Other shards only" and "Group
+-- Finder and chat"; Group by defaults to activity.
+function L.migrateBrowse(db)
+	if db.where == nil then
+		db.where = db.otherOnly and "other" or (db.nearby == false and "og") or "all"
+	end
+	db.otherOnly = nil
+	if db.groupBy == nil then db.groupBy = "act" end
+	return db
+end
+
+-- Columns for a row this wide: { order = { {key, x, w}, ... }, at = { key = {x, w} } }. Activity takes
+-- what's left; when that gets too small, Leader and Where shrink, then the least useful columns go
+-- (Size, then Age, then Where).
+L.COLUMNS = {
+	{ key = "cls", w = 16 }, { key = "lvl", w = 22 }, { key = "leader", w = 112, min = 86 }, { key = "act", flex = true, min = 96 },
+	{ key = "levels", w = 50 }, { key = "size", w = 30, drop = 1 }, { key = "needs", w = 74 },
+	{ key = "where", w = 82, min = 66, drop = 3 }, { key = "age", w = 30, drop = 2 },
+}
+L.COL_GAP = 6
+function L.columns(width)
+	local cols, hidden = {}, {}
+	for _, c in ipairs(L.COLUMNS) do cols[#cols + 1] = { key = c.key, w = c.w, min = c.min, flex = c.flex, drop = c.drop } end
+	local function flexWidth()
+		local used, n = 0, 0
+		for _, c in ipairs(cols) do if not hidden[c.key] then n = n + 1 if not c.flex then used = used + c.w end end end
+		return width - used - (n - 1) * L.COL_GAP
+	end
+	local actMin = 96
+	if flexWidth() < actMin then for _, c in ipairs(cols) do if c.min and not c.flex then c.w = c.min end end end
+	for step = 1, 3 do
+		if flexWidth() >= actMin then break end
+		for _, c in ipairs(cols) do if c.drop == step then hidden[c.key] = true end end
+	end
+	local out, at, x = {}, {}, 0
+	local fw = math.max(40, flexWidth())
+	for _, c in ipairs(cols) do
+		if not hidden[c.key] then
+			local w = c.flex and fw or c.w
+			out[#out + 1] = { key = c.key, x = x, w = w }
+			at[c.key] = { x = x, w = w }
+			x = x + w + L.COL_GAP
+		end
+	end
+	return { order = out, at = at, hidden = hidden }
+end
+
+-- --------------------------------------------------------------------------------------------
+-- Whispers since login, for the Whispers tab: everyone, with the people OpenGroup links you to
+-- (they're listed, you asked or invited them, or you whispered them from a row) marked and first.
+-- The game can hand addons "secret" values during lockdown; those are never compared or shown,
+-- only counted.
+
+L.whispers = {}        -- [name] = { name, msgs = { { at, out, text | nil, hidden } }, unread, last }
+L.whisperLinks = {}    -- [name] = true: whispered or asked from an OpenGroup row
+L.whisperHidden = 0    -- messages the game didn't let us read
+local MAX_MSGS, MAX_PEOPLE = 60, 60
+
+local function readable(v)
+	if canaccessvalue and not canaccessvalue(v) then return false end
+	return v ~= nil
+end
+
+-- one whisper in or out; viewing = the player is looking at this conversation (no unread then)
+function L.addWhisper(text, who, out, now, viewing)
+	if not readable(who) or type(who) ~= "string" or who == "" then L.whisperHidden = L.whisperHidden + 1 return nil end
+	local name = L.short(who)
+	local c = L.whispers[name]
+	if not c then
+		c = { name = name, msgs = {}, unread = 0, last = now }
+		L.whispers[name] = c
+		-- keep the newest conversations
+		local n, oldest = 0, nil
+		for k, v in pairs(L.whispers) do n = n + 1 if not oldest or v.last < L.whispers[oldest].last then oldest = k end end
+		if n > MAX_PEOPLE and oldest and oldest ~= name then L.whispers[oldest] = nil end
+	end
+	local hidden = not readable(text) or type(text) ~= "string"
+	if hidden then L.whisperHidden = L.whisperHidden + 1 end
+	c.msgs[#c.msgs + 1] = { at = now, out = out and true or false, text = (not hidden) and text or nil, hidden = hidden or nil }
+	while #c.msgs > MAX_MSGS do table.remove(c.msgs, 1) end
+	c.last = now
+	if not out and not viewing then c.unread = c.unread + 1 end
+	return c
+end
+
+-- Class and level for a name, for the Whispers tab: the class from the whisper's GUID (the game
+-- gives it for anyone), the level from what OpenGroup already knows (a hello or listing), else the
+-- party, friends, guild, or a /who already on hand. Never a /who of its own. Cached per name.
+L.people = {}          -- [name] = { class = "WARRIOR", level = 52 }
+local function readable2(v) return readable(v) end
+function L.notePerson(name, guid)
+	local p = L.people[name] or {}
+	L.people[name] = p
+	if not p.class and readable2(guid) and type(guid) == "string" and GetPlayerInfoByGUID then
+		local ok, _, cls = pcall(GetPlayerInfoByGUID, guid)
+		if ok and readable2(cls) and type(cls) == "string" and cls ~= "" then p.class = cls end
+	end
+	return p
+end
+local CLASS_OF = nil
+local function classToken(localized)
+	if type(localized) ~= "string" then return nil end
+	if not CLASS_OF then
+		CLASS_OF = {}
+		for token, n in pairs(LOCALIZED_CLASS_NAMES_MALE or {}) do CLASS_OF[n] = token end
+		for token, n in pairs(LOCALIZED_CLASS_NAMES_FEMALE or {}) do CLASS_OF[n] = token end
+	end
+	return CLASS_OF[localized] or (P.CLASS_ROLES[localized:upper()] and localized:upper()) or nil
+end
+function L.personInfo(name)
+	local p = L.people[name] or {}
+	L.people[name] = p
+	local l = (L.listings and L.listings[name]) or (L.nearby and L.nearby[name])
+	if l then
+		if l.class and l.class ~= "" then p.class = l.class end
+		if (l.level or 0) > 0 then p.level = l.level end
+	end
+	local peer = L.peers and L.peers[name]
+	if peer and (peer.level or 0) > 0 then p.level = peer.level end
+	if p.class and p.level then return p end
+	-- the party or raid
+	if IsInGroup and IsInGroup() then
+		local raid = IsInRaid and IsInRaid()
+		for i = 1, raid and 40 or 4 do
+			local unit = (raid and "raid" or "party") .. i
+			if UnitExists and UnitExists(unit) and L.short(UnitName(unit) or "") == name then
+				p.class = p.class or select(2, UnitClass(unit))
+				local lv = UnitLevel(unit)
+				if lv and lv > 0 then p.level = lv end
+			end
+		end
+	end
+	-- friends
+	if not p.level and C_FriendList and C_FriendList.GetFriendInfo then
+		local ok, f = pcall(C_FriendList.GetFriendInfo, name)
+		if ok and type(f) == "table" and readable2(f.level) and (f.level or 0) > 0 then
+			p.level = f.level
+			p.class = p.class or classToken(f.className)
+		end
+	end
+	-- the guild roster
+	if not p.level and IsInGuild and IsInGuild() and GetNumGuildMembers and GetGuildRosterInfo then
+		local n = GetNumGuildMembers() or 0
+		for i = 1, math.min(n, 1000) do
+			local ok, gname, _, _, lv, _, _, _, _, _, _, cls = pcall(GetGuildRosterInfo, i)
+			if ok and type(gname) == "string" and L.short(gname) == name then
+				if (lv or 0) > 0 then p.level = lv end
+				if type(cls) == "string" and cls ~= "" then p.class = p.class or cls end
+				break
+			end
+		end
+	end
+	-- a /who result already on hand
+	if not p.level and C_FriendList and C_FriendList.GetNumWhoResults and C_FriendList.GetWhoInfo then
+		local n = select(1, C_FriendList.GetNumWhoResults()) or 0
+		for i = 1, math.min(n, 50) do
+			local ok, w = pcall(C_FriendList.GetWhoInfo, i)
+			if ok and type(w) == "table" and type(w.fullName) == "string" and L.short(w.fullName) == name then
+				if (w.level or 0) > 0 then p.level = w.level end
+				p.class = p.class or w.filename
+				break
+			end
+		end
+	end
+	return p
+end
+
+-- "Level 52 Warrior", "Warrior" or ""
+function L.personLine(name)
+	local p = L.personInfo(name)
+	local cls = p.class and ((LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[p.class]) or (p.class:sub(1, 1) .. p.class:sub(2):lower())) or nil
+	if p.level and cls then return ("Level %d %s"):format(p.level, cls) end
+	if p.level then return "Level " .. p.level end
+	return cls or ""
+end
+
+function L.whisperUnread()
+	local n = 0
+	for _, c in pairs(L.whispers) do n = n + (c.unread or 0) end
+	return n
+end
+
+-- is OpenGroup how we know them? (a listing, a whisper or ask from a row, an auto invite)
+function L.whisperLinked(name)
+	if L.whisperLinks[name] or (L.listings and L.listings[name]) or (L.nearby and L.nearby[name]) then return true end
+	local AI = OpenGroup_AutoInvite
+	return AI and (AI.pending[name] or AI.joined[name] or AI.asks[name]) and true or false
+end
+
+-- the conversations, OpenGroup's first, then the newest; ogOnly leaves the rest out
+function L.whisperList(ogOnly)
+	local out = {}
+	for name, c in pairs(L.whispers) do
+		c.linked = L.whisperLinked(name)
+		if c.linked or not ogOnly then out[#out + 1] = c end
+	end
+	table.sort(out, function(a, b)
+		if a.linked ~= b.linked then return a.linked end
+		if a.last ~= b.last then return a.last > b.last end
+		return a.name < b.name
+	end)
+	return out
+end
+
+if CreateFrame then
+	local wf = CreateFrame("Frame")
+	wf:RegisterEvent("CHAT_MSG_WHISPER")
+	wf:RegisterEvent("CHAT_MSG_WHISPER_INFORM")
+	wf:SetScript("OnEvent", function(_, ev, text, who, ...)
+		local guid = select(10, ...)
+		local ok = pcall(function()
+			local out = ev == "CHAT_MSG_WHISPER_INFORM"
+			local viewing = L.whisperViewing and readable(who) and type(who) == "string" and L.short(who) == L.whisperViewing
+			local c = L.addWhisper(text, who, out, time(), viewing)
+			if c then L.notePerson(c.name, guid) end
+		end)
+		if ok and L.onWhisper then pcall(L.onWhisper) end
+	end)
+end
+
+-- --------------------------------------------------------------------------------------------
+-- Your party's listing: when the leader lists, changes or unlists the group, their OpenGroup tells
+-- the party (a hidden addon message to PARTY or RAID), so members who run OpenGroup see it too: a
+-- line in chat, the minimap button's listed light and the listing on the List tab (read only).
+-- Only the current leader's messages count. A member who logs in or reloads asks for it.
+
+L.groupListing = nil   -- { l = listing, leader = name, got = time } while our leader has the group listed
+local GROUP_KEEP = 300
+local lastTold = 0
+
+local function groupChannel()
+	if not (IsInGroup and IsInGroup()) then return nil end
+	return (IsInRaid and IsInRaid()) and "RAID" or "PARTY"
+end
+local function amLeader() return UnitIsGroupLeader and UnitIsGroupLeader("player") and true or false end
+
+-- the party's leader, by name (nil when not in a group)
+function L.groupLeader()
+	if not (IsInGroup and IsInGroup()) then return nil end
+	if amLeader() then return L.me() end
+	local raid = IsInRaid and IsInRaid()
+	for i = 1, raid and 40 or 4 do
+		local unit = (raid and "raid" or "party") .. i
+		if UnitExists and UnitExists(unit) and UnitIsGroupLeader(unit) then return (UnitName(unit)) end
+	end
+	return nil
+end
+
+-- what went to and came from the party, for /og status
+L.groupStats = { sent = 0, got = 0, ignored = 0 }
+local function sendGroup(msg)
+	local ch = groupChannel()
+	if not ch or not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then return false end
+	local ok, res = pcall(C_ChatInfo.SendAddonMessage, P.PREFIX, msg, ch)
+	L.groupStats.sent = L.groupStats.sent + 1
+	L.groupStats.lastSent = msg:sub(1, 2) .. " to " .. ch .. " (" .. (ok and tostring(res) or "error") .. ")"
+	return true
+end
+
+-- the leader's side: tell the party what we're listed for (or that we're not). force = now,
+-- otherwise at most once a minute (the regular re-announce)
+function L.tellGroup(force)
+	if not groupChannel() or not amLeader() then return end
+	if not force and GetTime() - lastTold < 60 then return end
+	lastTold = GetTime()
+	local m = L.mine
+	if m and GetNumGroupMembers() > 1 then sendGroup(P.groupListing(L.mineForSend()))
+	else sendGroup(P.groupUnlisted(OpenGroupDB and OpenGroupDB.seq or 0)) end
+end
+
+local function clearGroup(say)
+	if not L.groupListing then return end
+	L.groupListing = nil
+	if say then L.print("your group is no longer listed.") end
+	if L.onGroupListing then pcall(L.onGroupListing) end
+	if L.onChange then L.onChange() end
+end
+L.clearGroupListing = clearGroup
+
+-- the member's side: a message from the party channel
+function L.receiveGroup(msg, sender)
+	if type(sender) ~= "string" or L.isMe(sender) then return end
+	local kind, d = P.parse(msg)
+	if kind == "GQ" then
+		if amLeader() then L.tellGroup(true) end
+		return
+	end
+	if kind ~= "G1" and kind ~= "G0" then return end
+	-- only the current leader speaks for the group
+	local leader = L.groupLeader()
+	if not leader or L.short(leader) ~= L.short(sender) then
+		L.groupStats.ignored = L.groupStats.ignored + 1
+		L.groupStats.lastIgnored = ("%s from %s (leader is %s)"):format(kind, L.short(sender), tostring(leader))
+		return
+	end
+	L.groupStats.got = L.groupStats.got + 1
+	if kind == "G0" then clearGroup(true) return end
+	local first = L.groupListing == nil or L.groupListing.leader ~= L.short(sender)
+	d.got = now()
+	L.groupListing = { l = d, leader = L.short(sender), got = now(), at = (not first and L.groupListing.at) or now() }
+	if first then
+		L.print(("your group is listed for %s."):format(L.titleOf(d)))
+		if OpenGroup_Alert then
+			pcall(OpenGroup_Alert.show, { head = "OpenGroup", small = "Your group", name = "Listed for " .. L.titleOf(d), icon = L.ICON, quiet = true })
+		end
+	end
+	if L.onGroupListing then pcall(L.onGroupListing) end
+	if L.onChange then L.onChange() end
+end
+
+-- send it when the leader lists, changes or unlists, and with the regular re-announce
+do
+	local post, setNeed, setSpots, delist, announce = L.post, L.setNeed, L.setSpots, L.delist, L.announce
+	L.post = function(...) local ok = post(...) if ok then L.tellGroup(true) end return ok end
+	L.setNeed = function(...) setNeed(...) L.tellGroup(true) end
+	L.setSpots = function(...) setSpots(...) L.tellGroup(true) end
+	L.delist = function(...) local had = L.mine ~= nil delist(...) if had then L.tellGroup(true) end end
+	L.announce = function(...) announce(...) L.tellGroup(false) end
+end
+
+if CreateFrame then
+	local gf = CreateFrame("Frame")
+	local members, leaderNow = 0, nil
+	gf:RegisterEvent("GROUP_ROSTER_UPDATE")
+	gf:RegisterEvent("PARTY_LEADER_CHANGED")
+	gf:RegisterEvent("PLAYER_ENTERING_WORLD")
+	local expiry
+	gf:SetScript("OnEvent", function(_, ev)
+		-- no word from the leader for 5 minutes: it's gone (checked from login on)
+		if ev == "PLAYER_ENTERING_WORLD" and not expiry and C_Timer and C_Timer.NewTicker then
+			expiry = C_Timer.NewTicker(15, function()
+				if L.groupListing and now() - L.groupListing.got > GROUP_KEEP then clearGroup(true) end
+			end)
+		end
+		local n = (IsInGroup and IsInGroup()) and GetNumGroupMembers() or 0
+		local leader = L.groupLeader()
+		if n == 0 then
+			clearGroup(L.groupListing ~= nil)
+		elseif ev == "PLAYER_ENTERING_WORLD" then
+			-- logged in or reloaded in a group: ask the leader what's listed
+			if not amLeader() and C_Timer then C_Timer.After(5, function() sendGroup(P.groupAsk()) end) end
+		else
+			-- the leader changed: what members held is gone; a new leader with OpenGroup keeps it listed
+			if leaderNow and leader and L.short(leader) ~= L.short(leaderNow) then
+				local held = L.groupListing
+				clearGroup(held ~= nil and not amLeader())
+				if amLeader() and held and not L.mine then
+					local l = held.l
+					L.post(l.title, l.note, l.need, l.cat, l.acts, l.price, l.quest, l.spots)
+					L.print("you lead the group now, so OpenGroup keeps it listed under your name.")
+				elseif not amLeader() and L.mine and n > 1 then
+					-- we handed the lead on: the new leader lists it now
+					L.delist()
+				end
+			end
+			-- someone joined while we're listed: tell them
+			if amLeader() and n > members then L.tellGroup(true) end
+		end
+		members, leaderNow = n, leader
+	end)
+end

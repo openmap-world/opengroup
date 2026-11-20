@@ -21,7 +21,18 @@
 --                                     when listing for one quest (title then holds its name).
 --                                     cat 90002 / 90003 = battleground queue offer / request
 --                                     (acts = the battlegrounds), see P.BGQ_OFFER.
+--      ...;<note>;<spots>             added in 0.6: the group's open spots, one per spot, split by
+--                                     ",": <role>/<class>/<min>/<max>, role = A (any), T, H or D,
+--                                     class = class file name or blank (any), min/max = level or
+--                                     blank. "T/WARRIOR//,D/HUNTER/52/54,A///". need still carries
+--                                     the roles, so older clients (which stop at <note>) see those.
 --   U1;<leader>;<seq>                 the leader delisted
+--   J1;<class>;<level>;<need>         "please invite me" (sent with Ask to Join), so a leader's auto
+--                                     invite knows the asker's class, level and roles (need bits)
+--   I1;<title>                        "my auto invite just invited you, for <title>"
+--   G1;<the L1 fields>                to PARTY/RAID: the leader's listing, so the party's OpenGroup shows it
+--   G0;<seq>                          to PARTY/RAID: the leader unlisted the group
+--   GQ                                to PARTY/RAID: "what is our group listed for?" (after a reload)
 -- Fields never contain ";" or "|" (stripped on the way in and out). A message stays under 250 bytes.
 
 local P = {}
@@ -59,7 +70,7 @@ local function split(s)
 	return out
 end
 
-P.VERSION = "0.6.0-test"
+P.VERSION = "0.6.0-beta"
 P.MAX_PX = 10           -- names per peer-exchange message
 
 function P.hello(shard, level) return ("H1;%d;%d;%s"):format(shard or 0, level or 0, clean(P.VERSION, 16)) end
@@ -77,7 +88,7 @@ function P.peerList(peers)
 	return n > 0 and msg or nil
 end
 
--- "0.6.0-test" -> 600; nil for anything else
+-- "0.6.0-beta" -> 600; nil for anything else
 function P.versionNumber(v)
 	local a, b, c = tostring(v or ""):match("^(%d+)%.(%d+)%.(%d+)")
 	if not a then return nil end
@@ -86,6 +97,13 @@ end
 function P.ping(token) return "P1;" .. clean(token, 16) end
 function P.pong(token, shard) return ("Q1;%s;%d"):format(clean(token, 16), shard or 0) end
 function P.unlist(leader, seq) return ("U1;%s;%d"):format(clean(leader, P.NAME_LEN), seq or 0) end
+function P.join(class, level, need)
+	return ("J1;%s;%d;%d"):format(clean(class or "", 12):upper():gsub("[^A-Z]", ""), int(level, 0, 200) or 0, int(need, 0, 7) or 0)
+end
+function P.invited(title) return "I1;" .. clean(title, P.TITLE_LEN) end
+function P.groupListing(l) return "G1;" .. P.listing(l):sub(4) end
+function P.groupUnlisted(seq) return ("G0;%d"):format(int(seq, 0, 2^31) or 0) end
+function P.groupAsk() return "GQ" end
 
 P.TANK, P.HEALER, P.DAMAGE = 1, 2, 4
 
@@ -98,6 +116,98 @@ P.BGQ_OFFER = 90002
 P.BGQ_WANT = 90003
 function P.isBGQ(cat) return cat == P.BGQ_OFFER or cat == P.BGQ_WANT end
 P.MAX_PRICE = 100000000  -- 10,000 gold
+
+-- open spots: { { role = 0 (any) | P.TANK | P.HEALER | P.DAMAGE, class = "HUNTER" | nil, min, max } }
+P.MAX_SPOTS = 4
+local ROLE_LETTER = { [0] = "A", [1] = "T", [2] = "H", [4] = "D" }
+local LETTER_ROLE = { A = 0, T = 1, H = 2, D = 4 }
+P.CLASS_ROLES = { WARRIOR = 5, PALADIN = 7, DRUID = 7, PRIEST = 6, SHAMAN = 6, HUNTER = 4, ROGUE = 4, MAGE = 4, WARLOCK = 4 }
+
+local function has(bits, b) return (bits or 0) % (b * 2) >= b end
+
+function P.spot(role, class, min, max)
+	local s = { role = LETTER_ROLE[ROLE_LETTER[role or 0] or "A"] }
+	class = clean(class or "", 12):upper():gsub("[^A-Z]", "")
+	if P.CLASS_ROLES[class] then s.class = class end
+	s.min, s.max = int(min, 1, 200), int(max, 1, 200)
+	if s.min and s.max and s.min > s.max then s.min, s.max = s.max, s.min end
+	return s
+end
+
+function P.spotsText(spots)
+	local out = {}
+	for _, sp in ipairs(type(spots) == "table" and spots or {}) do
+		if #out >= P.MAX_SPOTS then break end
+		local s = P.spot(sp.role, sp.class, sp.min, sp.max)
+		out[#out + 1] = ("%s/%s/%s/%s"):format(ROLE_LETTER[s.role], s.class or "", s.min or "", s.max or "")
+	end
+	return table.concat(out, ",")
+end
+
+function P.spotsParse(text)
+	local out = {}
+	if type(text) ~= "string" then return out end
+	for item in text:gmatch("[^,]+") do
+		local r, c, lo, hi = item:match("^(%a)/(%a*)/(%d*)/(%d*)$")
+		if r and LETTER_ROLE[r:upper()] and #out < P.MAX_SPOTS then
+			out[#out + 1] = P.spot(LETTER_ROLE[r:upper()], c, lo, hi)
+		end
+	end
+	return out
+end
+
+-- the need bits for a set of spots (an "any" spot asks for every role)
+function P.needOfSpots(spots)
+	local need = 0
+	for _, s in ipairs(spots or {}) do
+		for _, r in ipairs({ 1, 2, 4 }) do
+			if (s.role == 0 or s.role == r) and not has(need, r) then need = need + r end
+		end
+	end
+	return need
+end
+
+-- n spots from need bits: a tank and a healer if wanted, the rest damage (or any role when the
+-- group doesn't want damage). need 0 counts as every role.
+function P.spotsFromNeed(need, n)
+	need = (need and need > 0) and need or 7
+	local out = {}
+	if has(need, 1) and #out < n then out[#out + 1] = P.spot(1) end
+	if has(need, 2) and #out < n then out[#out + 1] = P.spot(2) end
+	while #out < n do out[#out + 1] = P.spot(has(need, 4) and 4 or 0) end
+	return out
+end
+
+-- The role a player would fill this spot as, or nil. roles = the roles they play (need bits);
+-- 0 means unknown, then their class decides.
+function P.spotFits(s, class, level, roles)
+	if s.class and s.class ~= class then return nil end
+	level = level or 0
+	if s.min and not (level > 0 and level >= s.min) then return nil end
+	if s.max and not (level > 0 and level <= s.max) then return nil end
+	roles = (roles and roles > 0) and roles or (P.CLASS_ROLES[class or ""] or 7)
+	if s.role ~= 0 then return has(roles, s.role) and s.role or nil end
+	for _, r in ipairs({ 1, 2, 4 }) do if has(roles, r) then return r end end
+	return nil
+end
+
+-- how picky a spot is: a class counts most, then a role, then a level range
+function P.spotScore(s)
+	return (s.class and 4 or 0) + ((s.role or 0) ~= 0 and 2 or 0) + ((s.min or s.max) and 1 or 0)
+end
+
+-- The spot a player fits best, most specific first. skip = { [index] = true } for spots taken.
+-- Returns index, role or nil.
+function P.bestSpot(spots, class, level, roles, skip)
+	local best, bestRole, bestScore
+	for i, s in ipairs(spots or {}) do
+		if not (skip and skip[i]) then
+			local r = P.spotFits(s, class, level, roles)
+			if r and (not bestScore or P.spotScore(s) > bestScore) then best, bestRole, bestScore = i, r, P.spotScore(s) end
+		end
+	end
+	return best, bestRole
+end
 
 local function actsText(acts)
 	local out = {}
@@ -125,8 +235,11 @@ function P.listing(l)
 		math.floor(l.age or 0), l.hops or 0, clean(l.class, 12):upper(), l.need or 0,
 		math.max(0, int(l.cat, 0, 99999) or 0), actsText(l.acts), int(l.price, 0, P.MAX_PRICE) or 0,
 		int(l.quest, 0, 10000000) or 0, clean(l.title, P.TITLE_LEN), clean(l.note, P.NOTE_LEN))
-	if #msg > P.MAX_LEN then msg = msg:sub(1, P.MAX_LEN) end
-	return msg
+	-- the spots go last; if it's too long the note gives way, not the spots
+	local spots = P.spotsText(l.spots)
+	local tail = spots ~= "" and (";" .. spots) or ""
+	if #msg + #tail > P.MAX_LEN then msg = msg:sub(1, P.MAX_LEN - #tail) end
+	return msg .. tail
 end
 
 -- Returns kind, table; or nil for anything malformed. Never errors.
@@ -162,6 +275,7 @@ function P.parse(msg)
 			hops = int(f[8], 0, 10), class = clean(f[9], 12):upper():gsub("[^A-Z]", ""), need = int(f[10], 0, 7),
 			cat = int(f[11], 0, 99999), acts = actsParse(f[12]), price = int(f[13], 0, P.MAX_PRICE),
 			quest = int(f[14], 0, 10000000), title = clean(f[15], P.TITLE_LEN), note = clean(f[16], P.NOTE_LEN),
+			spots = P.spotsParse(f[17]),
 		}
 		if not l.price or not l.quest then return nil end
 		if l.quest > 0 and l.title == "" then return nil end
@@ -170,6 +284,20 @@ function P.parse(msg)
 		if not (l.seq and l.shard and l.level and l.size and l.age and l.hops and l.need and l.cat) then return nil end
 		if l.age > P.MAX_AGE then return nil end
 		return kind, l
+	elseif kind == "J1" then
+		local level, need = int(f[3], 0, 200), int(f[4], 0, 7)
+		if not level or not need then return nil end
+		return kind, { class = clean(f[2], 12):upper():gsub("[^A-Z]", ""), level = level, need = need }
+	elseif kind == "G1" then
+		local k, l = P.parse("L1;" .. msg:sub(4))
+		if k ~= "L1" then return nil end
+		return kind, l
+	elseif kind == "G0" then
+		return kind, { seq = int(f[2], 0, 2^31) or 0 }
+	elseif kind == "GQ" then
+		return kind, {}
+	elseif kind == "I1" then
+		return kind, { title = clean(f[2], P.TITLE_LEN) }
 	elseif kind == "U1" then
 		local leader, seq = clean(f[2], P.NAME_LEN), int(f[3], 0, 2^31)
 		if leader == "" or not seq then return nil end
