@@ -3613,6 +3613,11 @@ SlashCmdList.OPENGROUP = function(msg)
 		L.print(("%s, %d players known, %d groups, sent %d, refused %d (%s), received %d, bad %d%s"):format(
 			OpenGroup_Nearby and OpenGroup_Nearby.serverName() or (L.CHAN .. " " .. L.shard()), L.count(L.peers), L.count(L.listings), s.sent, s.refused, tostring(L.lastRefusal or "-"),
 			s.got, s.bad, L.lastError and (", last error: " .. tostring(L.lastError)) or ""))
+		local why = {}
+		for k, v in pairs(L.probeWhy or {}) do why[#why + 1] = k .. " " .. v end
+		table.sort(why)
+		L.print(("hellos %d (%s); people around you waiting %d, asked this session %d"):format(s.probes or 0,
+			#why > 0 and table.concat(why, ", ") or "none yet", #(L.nearQueue or {}), L.count(L.nearAsked or {})))
 		local found = {}
 		for _, n in ipairs({ "LFGParentFrame", "PVEFrame", "GroupFinderFrame", "LFGListingFrame" }) do if _G[n] then found[#found + 1] = n end end
 		L.print("Group Finder tab on: " .. tostring(OpenGroup_GroupFinderTab and OpenGroup_GroupFinderTab.attach() and "yes" or "not yet") ..

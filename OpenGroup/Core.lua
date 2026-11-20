@@ -27,8 +27,8 @@ local ANNOUNCE_PEERS = 25         -- to this many peers per round (rotating)
 local RELAY_COUNT = 3
 local OFFLINE_FOR = 600           -- a peer the game says is offline is skipped this long
 local PEER_MAX = 600              -- remember at most this many (newest kept)
-local PX_SEND = 8                 -- names to share in a peer exchange
-local PX_PROBE = 8                -- hellos to send per peer exchange we receive
+local PX_SEND = 20                -- names to share in a peer exchange (sent as messages of P.MAX_PX)
+local PX_PROBE = 20               -- hellos to send per peer exchange message we receive
 
 -- --------------------------------------------------------------------------------------------
 -- helpers
@@ -237,6 +237,41 @@ function L.probe(name, why)
 	return true
 end
 
+-- Players around you: the ones you mouse over and whose nameplates show up get a quiet hello too
+-- (same faction, real players, not in instances or combat). A small queue, one hello every 2
+-- seconds, the oldest dropped past 30; anyone asked this way isn't asked again this session
+-- (only OpenGroup users answer, so most never do).
+L.nearQueue, L.nearAsked = {}, {}
+local NEAR_MAX = 30
+function L.noteNearby(unit)
+	if not UnitIsPlayer or not UnitIsPlayer(unit) then return false end
+	if UnitIsUnit and UnitIsUnit(unit, "player") then return false end
+	if UnitFactionGroup and UnitFactionGroup(unit) ~= UnitFactionGroup("player") then return false end
+	if IsInInstance then local inside = IsInInstance() if inside then return false end end
+	local name = L.unitName(unit)
+	if not name or (canaccessvalue and not canaccessvalue(name)) then return false end
+	name = L.short(name)
+	if L.peers[name] or L.nearAsked[name] or L.isMe(name) then return false end
+	for _, n in ipairs(L.nearQueue) do if n == name then return false end end
+	L.nearQueue[#L.nearQueue + 1] = name
+	while #L.nearQueue > NEAR_MAX do table.remove(L.nearQueue, 1) end
+	-- the 2-second drip starts with the first player noticed
+	if not L.nearTicker and C_Timer and C_Timer.NewTicker then L.nearTicker = C_Timer.NewTicker(2, function() pcall(L.nearTick) end) end
+	return true
+end
+-- the next one in the queue: every 2 seconds
+function L.nearTick()
+	if InCombatLockdown and InCombatLockdown() then return false end
+	while #L.nearQueue > 0 do
+		local name = table.remove(L.nearQueue, 1)
+		if not L.peers[name] and not L.nearAsked[name] then
+			L.nearAsked[name] = true
+			if L.probe(name, "nearby") then return true end
+		end
+	end
+	return false
+end
+
 -- who to tell a newcomer about: recently heard, live, other shards than theirs first
 local function shareList(to, toShard, max)
 	local far, near = {}, {}
@@ -252,10 +287,20 @@ local function shareList(to, toShard, max)
 	return out
 end
 
+-- up to PX_SEND names, newest first and other chat numbers first, in messages of at most P.MAX_PX
+-- (what older versions read from one message)
 local function sharePeers(to, toShard)
-	local msg = P.peerList(shareList(to, toShard, PX_SEND))
-	if msg then L.send(to, msg) end
+	local list = shareList(to, toShard, PX_SEND)
+	local i = 1
+	while i <= #list do
+		local chunk = {}
+		for k = i, math.min(#list, i + P.MAX_PX - 1) do chunk[#chunk + 1] = list[k] end
+		local msg = P.peerList(chunk)
+		if msg then L.send(to, msg) end
+		i = i + P.MAX_PX
+	end
 end
+L.sharePeers = sharePeers
 
 local function notePeerVersion(v)
 	local n = P.versionNumber(v)
@@ -1359,4 +1404,11 @@ function L.whoQuery(q)
 		parts[#parts + 1] = tostring(lo or hi)
 	end
 	return table.concat(parts, " ")
+end
+
+-- players around you (L.noteNearby, L.nearTick above)
+if CreateFrame then
+	local nf = CreateFrame("Frame")
+	for _, ev in ipairs({ "UPDATE_MOUSEOVER_UNIT", "NAME_PLATE_UNIT_ADDED" }) do pcall(nf.RegisterEvent, nf, ev) end
+	nf:SetScript("OnEvent", function(_, ev, unit) pcall(L.noteNearby, ev == "UPDATE_MOUSEOVER_UNIT" and "mouseover" or unit) end)
 end

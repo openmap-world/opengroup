@@ -11,6 +11,7 @@
 - When your chat number changes (joining a group elsewhere, a zone change), OpenGroup notices, updates "You're on Chat N" and tells the OpenGroup players you know
 - List in the game's Group Finder too (test): when you list for a dungeon or another activity the game knows, the List click also lists you in the game's own Group Finder, so players without OpenGroup on your server see it. "Also list in Group Finder" on the List page turns it off; Leave takes it down. Solo or as leader only
 - Posting in LookingForGroup chat is now its own button on the listed bar (Post in LFG), since the game allows one such action per click
+- Finds other OpenGroup users faster: players you mouse over or walk past (their nameplates) get a quiet hello, one every 2 seconds, each at most once a session; and every user you meet now passes on up to 20 others they know instead of 8. /og status shows hellos by reason
 - Players queued for several activities: Group by activity lists them under each one, and with an Activity filter or a search only under the matching ones. The Activity column shows the matching one first ("Scholomance +2") and the tooltip lists them all
 - The search box matches every activity a player is queued for, and short names like scholo, strat, ubrs, lbrs, brd, dme, zf, sm, rfd, gnomer
 - Groups passed on from other servers' Group Finder keep every activity they're queued for (up to four)

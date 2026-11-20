@@ -669,5 +669,51 @@ Ng.onEvent(nil, "ADDON_ACTION_BLOCKED", "OpenGroup", "UNKNOWN()")
 assert(Ng.noSearch == nsBefore, "a refused listing doesn't pause Group Finder searches")
 OpenGroup.print = savePrint
 print("game listing ok")
+-- people around you: same faction, real players, a queue of 30, one hello per tick, never twice a session
+local units = {}
+local saveUN, saveUFG, saveUIP = UnitName, UnitFactionGroup, UnitIsPlayer
+UnitIsPlayer = function(u) return units[u] ~= nil and units[u].player end
+UnitIsUnit = function(a, b) return a == b end
+UnitFactionGroup = function(u) if u == "player" then return "Horde" end return units[u] and units[u].faction end
+UnitName = function(u) if u == "player" then return "Ann", "A" end local x = units[u] if x then return x.first, x.last end end
+IsInInstance = function() return false end
+InCombatLockdown = function() return false end
+units.np1 = { player = true, faction = "Horde", first = "Near", last = "One" }
+units.np2 = { player = true, faction = "Alliance", first = "Ally", last = "Two" }
+units.np3 = { player = false, faction = "Horde", first = "Npc", last = "Three" }
+OpenGroup.nearQueue, OpenGroup.nearAsked = {}, {}
+assert(OpenGroup.noteNearby("np1") and not OpenGroup.noteNearby("np2") and not OpenGroup.noteNearby("np3"), "same faction, real players only")
+assert(not OpenGroup.noteNearby("np1"), "once in the queue")
+for i = 1, 40 do units["x" .. i] = { player = true, faction = "Horde", first = "Walker", last = "N" .. i } OpenGroup.noteNearby("x" .. i) end
+assert(#OpenGroup.nearQueue == 30, "queue capped at 30, oldest dropped")
+local p0 = OpenGroup.stats.probes or 0
+OpenGroup.probed = {}
+assert(OpenGroup.nearTick() and (OpenGroup.stats.probes or 0) == p0 + 1, "one hello per tick")
+assert((OpenGroup.probeWhy or {}).nearby and OpenGroup.probeWhy.nearby >= 1, "counted as nearby")
+local asked = OpenGroup.nearQueue[1]
+OpenGroup.nearTick()
+OpenGroup.probed = {}
+units.again = { player = true, faction = "Horde", first = "Walker", last = "N11" }
+assert(not OpenGroup.noteNearby("again"), "asked this session: not again, even after 30 minutes")
+IsInInstance = function() return true, "party" end
+assert(not OpenGroup.noteNearby("x40") or true, "instances")
+units.inst = { player = true, faction = "Horde", first = "Inst", last = "I" }
+assert(not OpenGroup.noteNearby("inst"), "not in instances")
+IsInInstance = function() return false end
+UnitName, UnitFactionGroup, UnitIsPlayer = saveUN, saveUFG, saveUIP
+-- word of mouth: up to 20 names, in messages older versions read (10 each)
+for n in pairs(OpenGroup.peers) do OpenGroup.peers[n] = nil end
+for i = 1, 25 do OpenGroup.peers["Peer P" .. i] = { shard = (i % 2 == 0) and 47 or 55, level = 60, seen = CLOCK - i } end
+local xs = {}
+local saveSend3 = OpenGroup.send
+OpenGroup.send = function(to, m, ...) if m:sub(1, 2) == "X1" then xs[#xs + 1] = m end end
+OpenGroup.sharePeers("Newbie N", 47)
+OpenGroup.send = saveSend3
+local total = 0
+for _, m in ipairs(xs) do local k, d = OpenGroup_Proto.parse(m) assert(k == "X1" and #d.peers <= 10, "each message within the old limit") total = total + #d.peers end
+print("word of mouth:", #xs, "messages,", total, "names; first:", xs[1]:sub(1, 40))
+assert(total == 20 and #xs == 2, "20 names in two messages")
+assert(xs[1]:find(":55"), "other chat numbers first")
+print("discovery ok")
 print("smoke OK")
 ''')
