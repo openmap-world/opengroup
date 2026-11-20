@@ -81,7 +81,7 @@ local function split(s)
 	return out
 end
 
-P.VERSION = "0.6.1-test"
+P.VERSION = "0.6.1"
 P.MAX_PX = 10           -- names per peer-exchange message
 
 function P.hello(shard, level) return ("H1;%d;%d;%s"):format(shard or 0, level or 0, clean(P.VERSION, 16)) end

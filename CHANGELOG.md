@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.6.1-test
+## v0.6.1
 
 - Players on your ignore list are hidden in Browse, Whispers and auto invite, and their messages are ignored
 - A listing passed on by another player shows as unconfirmed until its leader confirms it, and is dropped if they don't
