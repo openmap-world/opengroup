@@ -39,7 +39,7 @@ jobs:
           pre=""; case "$TAG" in *-alpha*|*-beta*) pre="--prerelease";; esac
           gh release create "$TAG" $pre --title "OpenGroup $TAG" \
             --notes-file "dist/OpenGroup-$TAG-changelog.md" "dist/OpenGroup-$TAG.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
