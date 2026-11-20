@@ -1,11 +1,12 @@
 # Changelog
 
-## v0.6.2-test
+## v0.6.2-beta
 
-- Other shards' LookingForGroup chat: recent LFG posts are passed on too and show as "LFG <shard>" rows (turn off with "Share LFG chat from my shard" on the Network tab)
-- Every shard's Group Finder: OpenGroup players pass on the groups their shard's Group Finder shows, so you see groups from other shards too (marked GF, with the shard and who saw them)
-- Fixed: two-part names ("Stuxnet Metasploit") were cut to the first word when taken from your target, your party or yourself. Test connection to target, the party listing and passed-on listings now use the full name
+- Groups from the game's Group Finder on other shards: OpenGroup players pass on what their Group Finder shows, so you see groups from other shards too (marked GF, with the shard and who saw them). Groups already in your own Group Finder aren't repeated, and /og status shows per shard how much of their Group Finder matches yours
+- LookingForGroup chat from other shards: recent LFG posts are passed on too and show as "LFG <shard>" rows. Untick "Share LFG chat from my shard" on the Network tab to stop sharing yours
+- Fixed: two-part names ("Stuxnet Metasploit") were cut to the first word when taken from your target, your party or yourself. Test connection to target, the party listing popup and passed-on listings now use the full name
 - Players whose shard isn't known yet show as "Shard unknown" instead of "Shard 0"
+- The CurseForge upload can now be told which file type to use
 
 ## v0.6.1
 
