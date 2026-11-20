@@ -54,7 +54,10 @@ if not ids:
                  % (len(found), game_version, n))
     ids = [found[0]["id"]]
 
-release = "alpha" if "-alpha" in version else "beta" if "-beta" in version else "release"
+# the file type: CF_RELEASE_TYPE (the manual run's choice) when it names one, else from the version
+release = os.environ.get("CF_RELEASE_TYPE", "").strip().lower()
+if release not in ("alpha", "beta", "release"):
+    release = "alpha" if "-alpha" in version else "beta" if "-beta" in version else "release"
 meta = {
     "changelog": open(notes_path, encoding="utf-8").read(),
     "changelogType": "markdown",

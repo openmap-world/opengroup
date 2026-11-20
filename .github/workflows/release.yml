@@ -12,6 +12,11 @@ on:
       tag:
         description: "The release's tag, already pushed (v0.6.0-beta): upload its zip to CurseForge"
         required: true
+      release_type:
+        description: "CurseForge file type. auto: from the tag (-alpha, -beta, else release)"
+        type: choice
+        options: [auto, alpha, beta, release]
+        default: auto
 permissions:
   contents: read
 jobs:
@@ -54,10 +59,12 @@ jobs:
     env:
       TAG: ${{ inputs.tag }}
       CF_API_KEY: ${{ secrets.CF_API_KEY }}
+      CF_RELEASE_TYPE: ${{ inputs.release_type }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag }}
+          # the upload script and the toc (project id, game version) come from the branch the run was
+          # started on (main); the zip itself is the one the build job made from the tag
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
