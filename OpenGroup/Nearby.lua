@@ -304,6 +304,51 @@ local function nextCategory()
 	return cats[2 + (math.floor(turn / 2) - 1) % (#cats - 1)]
 end
 
+-- --------------------------------------------------------------------------------------------
+-- Languages. With no language filter the game's search returns your own language only; given a
+-- set, it returns those and the default ones it locks (yours). Results carry no language, so this
+-- only works on the search. OpenGroup sends every offered language by default ("All languages"
+-- in Browse's Filter menu), or the ones picked there; it never changes the game's own saved
+-- language filter. Saved: OpenGroupDB.langAll (nil = on) and OpenGroupDB.langs = { [code] = true }.
+
+-- the codes the game offers, in its order (none if it answers anything else)
+function N.offeredLanguages()
+	local out, seen = {}, {}
+	local get = C_LFGList and C_LFGList.GetAvailableLanguageSearchFilter
+	local ok, list = false, nil
+	if get then ok, list = pcall(get) end
+	if ok and type(list) == "table" then
+		for _, code in ipairs(list) do
+			if type(code) == "string" and not seen[code] then seen[code] = true out[#out + 1] = code end
+		end
+	end
+	return out
+end
+-- the ones the game always searches (yours), as a set
+function N.lockedLanguages()
+	local get = C_LFGList and C_LFGList.GetDefaultLanguageSearchFilter
+	local ok, set = false, nil
+	if get then ok, set = pcall(get) end
+	return (ok and type(set) == "table") and set or {}
+end
+function N.allLanguages() return not (type(OpenGroupDB) == "table" and OpenGroupDB.langAll == false) end
+-- the set for C_LFGList.Search: every offered language, or the locked ones and those picked;
+-- nil (the game's default, your language) when that adds nothing
+function N.languageFilter()
+	local locked, picked = N.lockedLanguages(), type(OpenGroupDB) == "table" and type(OpenGroupDB.langs) == "table" and OpenGroupDB.langs or {}
+	local all = N.allLanguages()
+	local filter, beyond = {}, false
+	for _, code in ipairs(N.offeredLanguages()) do
+		if locked[code] then filter[code] = true
+		elseif all or picked[code] then filter[code] = true beyond = true end
+	end
+	return beyond and filter or nil
+end
+-- a language's name: the game's own string where it has one, else the code
+function N.languageName(code)
+	return _G["LFG_LIST_LANGUAGE_" .. tostring(code):upper()] or tostring(code)
+end
+
 local lastSearch = -SEARCH_GAP
 N.searchAt = nil   -- GetTime() of our last search call, to tell a blocked search from anything else
 -- The game allows a Group Finder search only inside a click (a hardware event), so this is only
@@ -328,7 +373,7 @@ function N.search(force, explicit, catID)
 	N.searchAt = t
 	-- which click it came from, for /og status if the game blocks it
 	N.searchFrom = debugstack and debugstack(2, 4, 0) or nil
-	C_LFGList.Search(c.id, 0, 0, nil, false, nil, c.acts)
+	C_LFGList.Search(c.id, 0, 0, N.languageFilter(), false, nil, c.acts)
 	return true
 end
 

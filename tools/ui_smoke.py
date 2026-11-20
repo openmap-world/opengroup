@@ -574,5 +574,38 @@ OpenGroup.receive(dm[1], "Rep R")
 local rm = OpenGroup.remote["Multi M"]
 assert(rm and #rm.acts == 3 and rm.acts[2] == 51, "other-server rows keep every activity")
 print("multi-activity ok")
+-- languages: All languages sends every offered one; picked ones send those and yours; never saved to the game
+local Nl = OpenGroup_Nearby
+C_LFGList.GetAvailableLanguageSearchFilter = function() return { "enUS", "deDE", "frFR" } end
+C_LFGList.GetDefaultLanguageSearchFilter = function() return { enUS = true } end
+local savedGame = false
+C_LFGList.SaveLanguageSearchFilter = function() savedGame = true end
+local langArg
+C_LFGList.Search = function(cat, f, pf, langs) langArg = langs end
+Nl.noSearch = nil
+OpenGroupDB.langAll, OpenGroupDB.langs = nil, nil
+CLOCK = CLOCK + 100
+assert(Nl.search(true, true), "search runs")
+assert(langArg and langArg.enUS and langArg.deDE and langArg.frFR, "All languages: every offered language")
+OpenGroupDB.langAll, OpenGroupDB.langs = false, { frFR = true }
+CLOCK = CLOCK + 100
+Nl.search(true, true)
+assert(langArg and langArg.enUS and langArg.frFR and not langArg.deDE, "picked: those and yours")
+OpenGroupDB.langs = {}
+CLOCK = CLOCK + 100
+Nl.search(true, true)
+assert(langArg == nil, "only yours: the game's default")
+assert(not savedGame, "the game's own language filter is left alone")
+local lmenu = {}
+local lfake = {}
+function lfake:CreateRadio() end function lfake:CreateTitle() end function lfake:CreateDivider() end
+function lfake:CreateCheckbox(text, isSel, onSel) lmenu[text] = { isSel, onSel } end
+OpenGroupDB.langAll = nil
+OpenGroup_UI.browse.buildFilter(lfake)
+assert(lmenu["All languages"] and lmenu["All languages"][1]() and lmenu["deDE"], "Language menu")
+lmenu["deDE"][2]()
+assert(OpenGroupDB.langAll == false and OpenGroupDB.langs.frFR and not OpenGroupDB.langs.deDE, "unticking one from All keeps the rest")
+OpenGroupDB.langAll, OpenGroupDB.langs = nil, nil
+print("languages ok")
 print("smoke OK")
 ''')

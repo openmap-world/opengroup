@@ -290,6 +290,29 @@ function browse.buildFilter(root)
 			L.onChange()
 		end)
 	end
+	-- the Group Finder search's languages (Search sends them; results don't say which they are)
+	local Nb = OpenGroup_Nearby
+	local lg = section("Language")
+	lg:CreateCheckbox("All languages", function() return Nb.allLanguages() end, function() db().langAll = not Nb.allLanguages() L.onChange() end)
+	local locked = Nb.lockedLanguages()
+	for _, code in ipairs(Nb.offeredLanguages()) do
+		if locked[code] then
+			lg:CreateCheckbox(Nb.languageName(code) .. GREY .. " (always)|r", function() return true end, function() end)
+		else
+			lg:CreateCheckbox(Nb.languageName(code), function() return Nb.allLanguages() or (type(db().langs) == "table" and db().langs[code] == true) end, function()
+				if Nb.allLanguages() then
+					-- unticking one from All: keep the rest
+					db().langAll = false
+					db().langs = {}
+					for _, c2 in ipairs(Nb.offeredLanguages()) do if c2 ~= code then db().langs[c2] = true end end
+				else
+					db().langs = type(db().langs) == "table" and db().langs or {}
+					db().langs[code] = (not db().langs[code]) or nil
+				end
+				L.onChange()
+			end)
+		end
+	end
 	local g = section("Group by")
 	for _, o in ipairs(browse.GROUPS) do
 		g:CreateRadio(o[2], function() return (db().groupBy or "act") == o[1] end, function() db().groupBy = o[1] collapsed = {} L.onChange() end)
