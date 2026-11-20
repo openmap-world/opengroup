@@ -117,6 +117,33 @@ function L.shard()
 	return L.shardSeen or 0
 end
 
+-- Our chat number can change: joining a group on another server shard or layer, a zone change, or
+-- the game moving us. Check after those events (and a moment later, once the channels have
+-- rejoined); when it changed, tell the OpenGroup players we heard from lately with a hello, so
+-- they file us under the new number, and redraw. At most one round of hellos per 30 seconds.
+L.lastShard = nil
+local shardToldAt = -1000
+function L.checkShard()
+	local n = L.shard()
+	if n <= 0 or n == L.lastShard then return false end
+	local old = L.lastShard
+	L.lastShard = n
+	if old and old > 0 then
+		L.shardChanges = (L.shardChanges or 0) + 1
+		if now() - shardToldAt >= 30 then
+			shardToldAt = now()
+			for _, name in ipairs(L.recent(15, true)) do L.send(name, P.hello(n, UnitLevel("player")), true) end
+		end
+		if L.onChange then pcall(L.onChange) end
+	end
+	return true
+end
+local function checkSoon()
+	pcall(L.checkShard)
+	if C_Timer and C_Timer.After then C_Timer.After(3, function() pcall(L.checkShard) end) end
+end
+L.checkShardSoon = checkSoon
+
 -- Everything the game says about our channels, for /og shard (the "?" hunt).
 function L.shardReport()
 	local lines = {}
@@ -676,6 +703,7 @@ f:RegisterEvent("CHAT_MSG_ADDON")
 f:RegisterEvent("CHAT_MSG_CHANNEL")
 f:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
 f:RegisterEvent("GROUP_ROSTER_UPDATE")
+for _, ev in ipairs({ "ZONE_CHANGED_NEW_AREA", "PLAYER_ENTERING_WORLD", "CHANNEL_UI_UPDATE" }) do pcall(f.RegisterEvent, f, ev) end
 f:RegisterEvent("CHAT_MSG_WHISPER")
 f:RegisterEvent("CHAT_MSG_WHISPER_INFORM")
 f:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4, ...)
@@ -685,13 +713,21 @@ f:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4, ...)
 		for _, name in ipairs({ a4, a9 }) do
 			if isShardChannel(name) then
 				local n = P.shardFromChannel(name)
-				if n then L.shardSeen, L.shardSeenFrom = n, tostring(name) return end
+				if n then
+					L.shardSeen, L.shardSeenFrom = n, tostring(name)
+					if ev == "CHAT_MSG_CHANNEL_NOTICE" or n ~= L.lastShard then pcall(L.checkShard) end
+					return
+				end
 			end
 		end
 		return
 	end
 	if ev == "GROUP_ROSTER_UPDATE" then
 		L.seedGroup()
+		checkSoon()
+		return
+	elseif ev == "ZONE_CHANGED_NEW_AREA" or ev == "PLAYER_ENTERING_WORLD" or ev == "CHANNEL_UI_UPDATE" then
+		checkSoon()
 		return
 	elseif ev == "CHAT_MSG_WHISPER" or ev == "CHAT_MSG_WHISPER_INFORM" then
 		L.seedWhisper(a2)

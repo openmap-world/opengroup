@@ -607,5 +607,23 @@ lmenu["deDE"][2]()
 assert(OpenGroupDB.langAll == false and OpenGroupDB.langs.frFR and not OpenGroupDB.langs.deDE, "unticking one from All keeps the rest")
 OpenGroupDB.langAll, OpenGroupDB.langs = nil, nil
 print("languages ok")
+-- the chat number changes (joined a group elsewhere, zone change): peers get a hello with the new one
+OpenGroup.checkShard()
+assert(OpenGroup.lastShard == 47, "first read")
+OpenGroup.peers["Pal P"] = { shard = 47, level = 60, seen = CLOCK }
+local hellos = {}
+local saveSend2 = OpenGroup.send
+OpenGroup.send = function(to, m, ...) if m:sub(1, 2) == "H1" then hellos[#hellos + 1] = to .. " " .. m end return saveSend2(to, m, ...) end
+GetChannelList = function() return 1, "Trade 55", false end
+assert(OpenGroup.checkShard() == true and OpenGroup.lastShard == 55, "a new number is noticed")
+print("hellos after the change:", table.concat(hellos, " | "))
+assert(#hellos > 0 and hellos[1]:find("H1;55;"), "peers hear the new number")
+local n0 = #hellos
+assert(OpenGroup.checkShard() == false and #hellos == n0, "no change, no hellos")
+GetChannelList = function() return 1, "Trade 47", false end
+OpenGroup.checkShard()
+assert(#hellos == n0, "a second change within 30 seconds: no new round of hellos")
+OpenGroup.send = saveSend2
+print("chat number refresh ok")
 print("smoke OK")
 ''')
