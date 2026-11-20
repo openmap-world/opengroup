@@ -1,0 +1,9 @@
+package-as: OpenGroup
+
+# the addon lives in OpenGroup/; only that folder goes in the zip
+move-folders:
+  OpenGroup/OpenGroup: OpenGroup
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown

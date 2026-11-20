@@ -1,0 +1,379 @@
+-- Groups from outside OpenGroup, on your own shard: the game's Group Finder and what people post
+-- in the LookingForGroup, Trade and General channels. They fill Browse while few people run
+-- OpenGroup yet, with a grey tag so it's always clear where a row came from. Nothing here is
+-- passed on to other players. Everyone seen gets the usual hidden hello, so the OpenGroup users
+-- among them join your network.
+--
+-- The game's Group Finder data can be "secret" while chat is locked down (in some instances and
+-- encounters): every value is checked with canaccessvalue before it's compared, joined or used
+-- as a key, and anything unreadable is skipped.
+local L = OpenGroup
+local A = OpenGroup_Activities
+local N = {}
+OpenGroup_Nearby = N
+L.nearby = {}   -- [name] = a listing-shaped table, plus src = "finder" | "chat"
+
+local FINDER_KEEP = 300   -- a Group Finder row lives this long after the last search that showed it
+local CHAT_KEEP = 600     -- a chat post, this long after the person last posted
+local SEARCH_GAP = 30     -- our own Group Finder searches, at most this often (a click forces 5)
+local TANK, HEAL, DPS = 1, 2, 4
+
+N.stats = { finder = 0, chat = 0, searches = 0, posted = 0 }
+
+local canaccess = canaccessvalue or function() return true end
+local function readable(v) return v ~= nil and canaccess(v) end
+local function str(v) return readable(v) and type(v) == "string" and v or nil end
+local function num(v) return readable(v) and tonumber(v) or nil end
+local function enabled() return not (type(OpenGroupDB) == "table" and OpenGroupDB.nearby == false) end
+local function clock() return time() end
+
+-- many chat lines a second in a capital: redraw at most twice a second
+local redrawPending
+local function changed()
+	if redrawPending then return end
+	redrawPending = true
+	local function go() redrawPending = false if L.onChange then L.onChange() end end
+	if C_Timer and C_Timer.After then C_Timer.After(0.5, go) else go() end
+end
+
+local function catOf(acts)
+	local i = acts[1] and A.info[acts[1]]
+	return i and i.cat or 0
+end
+
+local function put(l)
+	l.seq, l.hops, l.price, l.quest = 0, 0, 0, 0
+	l.shard = L.shard()
+	l.cat = l.cat or catOf(l.acts)
+	l.title, l.note = l.title or "", l.note or ""
+	l.level, l.size, l.need = l.level or 0, l.size or 1, l.need or 0
+	L.nearby[l.leader] = l
+end
+
+function N.count(src)
+	local n = 0
+	for _, l in pairs(L.nearby) do if not src or l.src == src then n = n + 1 end end
+	return n
+end
+
+-- --------------------------------------------------------------------------------------------
+-- chat: "LFM BRD need heals", "LFG strat UD as tank"
+
+-- what people type -> words in the activity's name, in English (other languages fall back to
+-- matching the activity's full or short name)
+local SHORT = {
+	rfc = "ragefire", wc = "wailing", vc = "deadmines", deadmines = "deadmines", dm = "deadmines",
+	sfk = "shadowfang", bfd = "blackfathom", stocks = "stockade", stockade = "stockade", stockades = "stockade",
+	gnomer = "gnomeregan", gnomeregan = "gnomeregan", rfk = "razorfen kraul", sm = "scarlet", scarlet = "scarlet",
+	rfd = "razorfen downs", ulda = "uldaman", uld = "uldaman", uldaman = "uldaman", zf = "zul'farrak",
+	mara = "maraudon", maraudon = "maraudon", st = "sunken temple", sunken = "sunken temple",
+	brd = "blackrock depths", lbrs = "lower blackrock", ubrs = "upper blackrock",
+	dme = "dire maul", dmw = "dire maul", dmn = "dire maul", dmt = "dire maul",
+	scholo = "scholomance", scholomance = "scholomance", strat = "stratholme", strath = "stratholme",
+	stratholme = "stratholme",
+}
+-- a wing named in the post narrows to the activities with that word in their name, if any have it
+local WINGS = {
+	lib = "library", library = "library", arm = "armory", armory = "armory", armoury = "armory",
+	cath = "cathedral", cathedral = "cathedral", gy = "graveyard", graveyard = "graveyard",
+	east = "east", west = "west", north = "north", tribute = "north",
+	dme = "east", dmw = "west", dmn = "north", dmt = "north",
+}
+local SKIP = { "wts", "wtb", "wtt", "selling", "buying", "recruit", "recruiting", "guild", "boost", "boosting",
+	"enchanter", "enchanting", "enchants", "lfw", "crafter", "crafting", "summon", "summons", "portal", "port", "carry" }
+local GROUP_MARKS = { "lfm", "lf%dm", "need", "needs", "lf tanks?", "lf heals?", "lf healers?", "lf dps", "lf more", "looking for more" }
+local PLAYER_MARKS = { "lfg", "lf group", "lf grp", "lf party", "looking for group", "looking for a group" }
+-- a plain "need ..." counts only with a dungeon or a role in it; these stand on their own
+local STRONG = { "lfm", "lf%dm", "lf more", "looking for more", "lfg", "lf group", "lf grp", "lf party", "looking for group", "looking for a group" }
+
+local function has(t, pat) return t:find("%f[%w]" .. pat .. "%f[^%w]") ~= nil end
+local function any(t, list) for _, p in ipairs(list) do if has(t, p) then return true end end return false end
+
+local function clean(text)
+	return (text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|H.-|h(.-)|h", "%1"):gsub("|T.-|t", "")
+		:gsub("{.-}", ""):gsub("%s+", " "):gsub("^ ", ""):gsub(" $", ""))
+end
+
+local function actsMatching(fragment)
+	local out = {}
+	for id, i in pairs(A.info) do
+		if type(i.name) == "string" and i.name:lower():find(fragment, 1, true) then out[#out + 1] = id end
+	end
+	table.sort(out, function(a, b) return (A.info[a].min or 0) > (A.info[b].min or 0) end)
+	return out
+end
+
+local function findActs(t)
+	local found, seen = {}, {}
+	local function add(list) for _, id in ipairs(list) do if not seen[id] then seen[id] = true found[#found + 1] = id end end end
+	local wing
+	for w in t:gmatch("[%w']+") do
+		local frag = SHORT[w]
+		-- "dm" alone is the Deadmines; with a direction or "tribute" it's Dire Maul
+		if w == "dm" and (has(t, "east") or has(t, "west") or has(t, "north") or has(t, "tribute")) then frag = "dire maul" end
+		if frag then add(actsMatching(frag)) end
+		wing = wing or WINGS[w]
+	end
+	-- the game's own names and short names, in the player's language
+	for id, i in pairs(A.info) do
+		if not seen[id] then
+			local name, short = (i.name or ""):lower(), (i.short or ""):lower()
+			if (#name >= 5 and t:find(name, 1, true)) or (#short >= 3 and short ~= name and has(t, short:gsub("(%p)", "%%%1"))) then
+				seen[id] = true found[#found + 1] = id
+			end
+		end
+	end
+	if wing and #found > 1 then
+		local narrowed = {}
+		for _, id in ipairs(found) do if A.info[id].name:lower():find(wing, 1, true) then narrowed[#narrowed + 1] = id end end
+		if #narrowed > 0 then found = narrowed end
+	end
+	return found
+end
+
+local function roles(t)
+	local need = 0
+	if has(t, "tanks?") then need = need + TANK end
+	if has(t, "heals?") or has(t, "healers?") or has(t, "heala") then need = need + HEAL end
+	if has(t, "dps") or has(t, "dd") or has(t, "damage") then need = need + DPS end
+	if need == 0 and (has(t, "need all") or has(t, "all roles")) then need = TANK + HEAL + DPS end
+	return need
+end
+
+-- One chat line -> { kind = "group" | "player", acts, need, size, text } or nil. Pure, for tests.
+function N.parse(text)
+	if type(text) ~= "string" or #text < 3 then return nil end
+	local shown = clean(text)
+	local t = " " .. shown:lower() .. " "
+	if any(t, SKIP) then return nil end
+	local group = any(t, GROUP_MARKS)
+	local player = not group and any(t, PLAYER_MARKS)
+	if not group and not player then return nil end
+	if A.load then A.load() end
+	local p = { kind = group and "group" or "player", acts = findActs(t), need = roles(t), text = shown }
+	-- "need help" is noise; "need a tank for BRD" or "LF2M Hogger" is a group
+	if #p.acts == 0 and p.need == 0 and not any(t, STRONG) then return nil end
+	if group then
+		local have = tonumber(t:match("(%d)%s*/%s*5"))
+		local more = tonumber(t:match("lf(%d)m"))
+		p.size = (have and have >= 1 and have <= 4 and have) or (more and more >= 1 and more <= 4 and 5 - more) or 2
+		p.sizeGuess = not have and not more
+	else
+		p.size = 1
+	end
+	return p
+end
+
+local CHANNELS = { "^lookingforgroup", "^lfg", "^trade", "^general", "^world" }
+local function wanted(chan)
+	chan = chan:gsub("^%d+%.%s*", ""):lower()
+	for _, pat in ipairs(CHANNELS) do if chan:find(pat) then return true end end
+	return false
+end
+
+function N.onChat(text, author, chanName, baseName, guid)
+	if not enabled() then return end
+	text, author = str(text), str(author)
+	if not text or not author or author == "" or L.isMe(author) then return end
+	local chan = str(baseName) or str(chanName) or ""
+	if chan == "" or not wanted(chan) then return end
+	local p = N.parse(text)
+	if not p then return end
+	local class
+	if str(guid) and GetPlayerInfoByGUID then
+		local ok, _, cls = pcall(GetPlayerInfoByGUID, guid)
+		if ok then class = str(cls) end
+	end
+	local matched = #p.acts > 0
+	put({
+		leader = author, src = "chat", chan = (chan:gsub("^%d+%.%s*", ""):gsub("%s*%d+$", "")),
+		class = class, size = p.size, sizeGuess = p.sizeGuess, need = p.need, acts = p.acts,
+		title = matched and "" or p.text:sub(1, 70), note = matched and p.text:sub(1, 120) or "",
+		got = clock(),
+	})
+	N.stats.chat = N.stats.chat + 1
+	L.probe(author, "chat")
+	changed()
+end
+
+-- --------------------------------------------------------------------------------------------
+-- the game's Group Finder
+
+local function finderListing(id, now)
+	local ok, info = pcall(C_LFGList.GetSearchResultInfo, id)
+	if not ok or not readable(info) or type(info) ~= "table" then return nil end
+	local leader = str(info.leaderName)
+	if not leader or leader == "" or L.isMe(leader) then return nil end
+	if readable(info.isDelisted) and info.isDelisted == true then return nil end
+	if readable(info.hasSelf) and info.hasSelf == true then return nil end
+	local size = num(info.numMembers) or 1
+	local acts = {}
+	local ids = info.activityIDs
+	if readable(ids) and type(ids) == "table" then
+		for _, a in ipairs(ids) do local n = num(a) if n then acts[#acts + 1] = n end end
+	elseif num(info.activityID) then
+		acts[1] = num(info.activityID)
+	end
+	local who
+	if size <= 1 and C_LFGList.GetSearchResultPlayerInfo then
+		local okP, m = pcall(C_LFGList.GetSearchResultPlayerInfo, id, 1)
+		if okP and readable(m) and type(m) == "table" then who = m end
+	elseif C_LFGList.GetSearchResultLeaderInfo then
+		local okP, m = pcall(C_LFGList.GetSearchResultLeaderInfo, id)
+		if okP and readable(m) and type(m) == "table" then who = m end
+	end
+	local need = 0
+	if size <= 1 then
+		-- the roles a solo player signed up as
+		local r = who and who.lfgRoles
+		if readable(r) and type(r) == "table" then
+			if readable(r.tank) and r.tank == true then need = need + TANK end
+			if readable(r.healer) and r.healer == true then need = need + HEAL end
+			if readable(r.dps) and r.dps == true then need = need + DPS end
+		end
+	elseif size < 5 and C_LFGList.GetSearchResultMemberCounts then
+		-- a group: the roles it's short of, for a party of 1 tank, 1 healer, 3 damage
+		local okC, c = pcall(C_LFGList.GetSearchResultMemberCounts, id)
+		if okC and readable(c) and type(c) == "table" then
+			if (num(c.TANK) or 1) < 1 then need = need + TANK end
+			if (num(c.HEALER) or 1) < 1 then need = need + HEAL end
+			if (num(c.DAMAGER) or 3) < 3 then need = need + DPS end
+		end
+	end
+	return {
+		leader = leader, src = "finder", size = size, acts = acts, need = need,
+		class = who and str(who.classFilename), level = who and num(who.level) or 0,
+		note = str(info.comment) or "", got = now,
+	}
+end
+
+local waitingCat   -- the category of the search we sent, until its results arrive
+
+function N.readFinder()
+	if not enabled() or not C_LFGList then return end
+	local get = C_LFGList.GetFilteredSearchResults or C_LFGList.GetSearchResults
+	if not get then return end
+	local ok, total, ids = pcall(get)
+	if not ok or not readable(total) or not readable(ids) or type(ids) ~= "table" then waitingCat = nil return end
+	local now, seen = clock(), {}
+	for _, id in ipairs(ids) do
+		local l = readable(id) and finderListing(id, now)
+		if l then
+			seen[l.leader] = true
+			put(l)
+			L.probe(l.leader, "finder")
+		end
+	end
+	-- after our own search, anyone in that category the game no longer lists has delisted
+	if waitingCat then
+		for name, l in pairs(L.nearby) do
+			if l.src == "finder" and l.cat == waitingCat and not seen[name] then L.nearby[name] = nil end
+		end
+	end
+	waitingCat = nil
+	N.stats.finder = N.count("finder")
+	changed()
+end
+
+function N.readOne(id)
+	if not enabled() or not C_LFGList or not readable(id) then return end
+	local l = finderListing(id, clock())
+	if l then put(l) changed() end
+end
+
+-- the categories worth searching (ones with activities), dungeons first; each search takes the next
+local turn = 0
+local function nextCategory()
+	local cats = {}
+	for _, c in ipairs(A.load()) do
+		if not c.fallback and c.id and c.id > 0 and #c.acts > 0 and not c.summon then
+			if tostring(c.name):lower():find("dungeon") then table.insert(cats, 1, c) else cats[#cats + 1] = c end
+		end
+	end
+	if #cats == 0 then return nil end
+	-- dungeons every other search, the rest in turn between
+	turn = turn + 1
+	if turn % 2 == 1 or #cats == 1 then return cats[1] end
+	return cats[2 + (math.floor(turn / 2) - 1) % (#cats - 1)]
+end
+
+local lastSearch = -SEARCH_GAP
+-- The game allows a Group Finder search only from a click, so this runs from OpenGroup's clicks.
+function N.search(force)
+	if not enabled() or not (C_LFGList and C_LFGList.Search) then return false end
+	local t = GetTime()
+	if t - lastSearch < (force and 5 or SEARCH_GAP) then return false end
+	-- leave the game's own list alone while the player has it open
+	if LFGParentFrame and LFGParentFrame.IsShown and LFGParentFrame:IsShown() then return false end
+	local c = nextCategory()
+	if not c then return false end
+	lastSearch = t
+	waitingCat = c.id
+	N.stats.searches = N.stats.searches + 1
+	local ok = pcall(C_LFGList.Search, c.id, 0, 0, nil, false, nil, c.acts)
+	if not ok then ok = pcall(C_LFGList.Search, c.id, c.acts) end
+	if not ok then waitingCat = nil end
+	return ok
+end
+
+-- --------------------------------------------------------------------------------------------
+-- posting your listing in LookingForGroup (on the List click, once)
+
+function N.lfgChannel()
+	local list = { GetChannelList() }
+	for i = 1, #list, 3 do
+		local id, name = list[i], list[i + 1]
+		if type(name) == "string" and name:gsub("^%d+%.%s*", ""):lower():find("^lookingforgroup") then return id end
+	end
+	if GetChannelName then
+		for id = 1, 10 do
+			local ok, cid, name = pcall(GetChannelName, id)
+			if ok and type(name) == "string" and name:lower():find("^lookingforgroup") then return cid end
+		end
+	end
+	return nil
+end
+
+function N.post(text)
+	local id = N.lfgChannel()
+	if not id then return false, "You're not in the LookingForGroup channel, so nothing was posted there." end
+	if C_ChatInfo and C_ChatInfo.InChatMessagingLockdown then
+		local ok, locked = pcall(C_ChatInfo.InChatMessagingLockdown)
+		if ok and locked then return false, "Chat is locked here, so nothing was posted in LookingForGroup." end
+	end
+	local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
+	local ok = send and pcall(send, text, "CHANNEL", nil, id)
+	if ok then N.stats.posted = N.stats.posted + 1 end
+	return ok and true or false, (not ok) and "The game didn't let OpenGroup post in LookingForGroup." or nil
+end
+
+-- --------------------------------------------------------------------------------------------
+-- events and housekeeping
+
+local f = CreateFrame("Frame")
+f:RegisterEvent("CHAT_MSG_CHANNEL")
+f:RegisterEvent("LFG_LIST_SEARCH_RESULTS_RECEIVED")
+f:RegisterEvent("LFG_LIST_SEARCH_RESULT_UPDATED")
+f:RegisterEvent("LFG_LIST_SEARCH_FAILED")
+f:SetScript("OnEvent", function(_, ev, ...)
+	if ev == "CHAT_MSG_CHANNEL" then
+		local text, author, _, chanName, _, _, _, _, baseName, _, _, guid = ...
+		pcall(N.onChat, text, author, chanName, baseName, guid)
+	elseif ev == "LFG_LIST_SEARCH_RESULTS_RECEIVED" then
+		pcall(N.readFinder)
+	elseif ev == "LFG_LIST_SEARCH_RESULT_UPDATED" then
+		pcall(N.readOne, (...))
+	elseif ev == "LFG_LIST_SEARCH_FAILED" then
+		waitingCat = nil
+	end
+end)
+
+function N.expire()
+	local now, gone = clock(), false
+	for name, l in pairs(L.nearby) do
+		if now - (l.got or 0) > (l.src == "chat" and CHAT_KEEP or FINDER_KEEP) then L.nearby[name] = nil gone = true end
+	end
+	if not enabled() and next(L.nearby) then L.nearby = {} gone = true end
+	if gone then changed() end
+end
+if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(30, function() pcall(N.expire) end) end
