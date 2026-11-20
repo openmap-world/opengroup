@@ -625,5 +625,49 @@ OpenGroup.checkShard()
 assert(#hellos == n0, "a second change within 30 seconds: no new round of hellos")
 OpenGroup.send = saveSend2
 print("chat number refresh ok")
+-- the game's own Group Finder: List creates (or updates) it from the click, Leave removes ours only
+local Ng = OpenGroup_Nearby
+local calls = {}
+local active = false
+C_LFGList.HasActiveEntryInfo = function() return active end
+C_LFGList.CreateListing = function(d) calls[#calls + 1] = "create " .. table.concat(d.activityIDs, ",") active = true end
+C_LFGList.UpdateListing = function(d) calls[#calls + 1] = "update " .. table.concat(d.activityIDs, ",") end
+C_LFGList.RemoveListing = function() calls[#calls + 1] = "remove" active = false end
+local rolesSet
+C_LFGListRoles = { SetRoles = function(r) rolesSet = r end }
+IsInGroup = function() return false end
+GetNumGroupMembers = function() return 0 end
+OpenGroupDB.gameList = nil
+assert(Ng.gameList({ 30, 31 }, 4, true) and calls[1] == "create 30,31", "List creates the game listing with the activities")
+assert(rolesSet and rolesSet.dps and not rolesSet.tank, "solo roles saved for the game")
+local pr = {}
+local savePrint = OpenGroup.print
+OpenGroup.print = function(m) pr[#pr + 1] = m end
+Ng.onGameEvent("LFG_LIST_ACTIVE_ENTRY_UPDATE")
+assert(Ng.game.listed and pr[1] and pr[1]:find("also listed"), "confirmed on the game's event")
+assert(Ng.gameList({ 30 }, 4, true) and calls[2] == "update 30", "already listed: update")
+assert(Ng.gameList({ 999 }, 4, true) == false or calls[3] == nil, "unknown activities aren't sent")
+assert(Ng.gameUnlist() and calls[#calls] == "remove", "Leave removes ours")
+active = true Ng.game.ours = nil
+local nCalls = #calls
+assert(Ng.gameUnlist() == false and #calls == nCalls, "a listing the player made in the game's window is left alone")
+active = false
+OpenGroupDB.gameList = false
+assert(Ng.gameList({ 30 }, 4, true) == false, "the setting turns it off")
+OpenGroupDB.gameList = nil
+GetNumGroupMembers = function() return 3 end
+UnitIsGroupLeader = function() return false end
+assert(Ng.gameList({ 30 }, 4, false) == false, "a group member can't list the group")
+GetNumGroupMembers = function() return 0 end
+C_LFGList.CreateListing = function() end
+Ng.gameList({ 30 }, 4, true)
+pr = {}
+Ng.onGameEvent("ADDON_ACTION_BLOCKED", "OpenGroup")
+assert(Ng.game.refused and pr[1] and pr[1]:find("refused"), "a refusal is said")
+local nsBefore = Ng.noSearch
+Ng.onEvent(nil, "ADDON_ACTION_BLOCKED", "OpenGroup", "UNKNOWN()")
+assert(Ng.noSearch == nsBefore, "a refused listing doesn't pause Group Finder searches")
+OpenGroup.print = savePrint
+print("game listing ok")
 print("smoke OK")
 ''')

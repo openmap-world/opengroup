@@ -1513,19 +1513,20 @@ tellParty:SetScript("OnEnter", function(self)
 end)
 tellParty:SetScript("OnLeave", GameTooltip_Hide)
 
--- "Post in LookingForGroup": one line in your server's LookingForGroup channel when you list, so
--- people without OpenGroup see it too (on by default; never repeated, never on updates)
+-- "Also list in Group Finder": the List click lists you in the game's own Group Finder too (dungeon
+-- and other activities the game knows), so players without OpenGroup see it (on by default)
 local lfgPost = CreateFrame("CheckButton", nil, list.footer, "UICheckButtonTemplate")
 lfgPost:SetSize(22, 22)
 lfgPost:SetPoint("TOP", list.footer, "TOP", -36, 0)
 local lfgPostLabel = list.footer:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
 lfgPostLabel:SetPoint("LEFT", lfgPost, "RIGHT", 2, 1)
-lfgPostLabel:SetText("Post in LFG chat")
-lfgPost:SetScript("OnClick", function(self) db().postLFG = self:GetChecked() and true or false end)
+lfgPostLabel:SetText("Also list in Group Finder")
+lfgPost:SetScript("OnClick", function(self) db().gameList = self:GetChecked() and true or false end)
 lfgPost:SetScript("OnEnter", function(self)
 	GameTooltip:SetOwner(self, "ANCHOR_TOP")
-	GameTooltip:SetText("Post in LFG chat")
-	GameTooltip:AddLine("When you list, OpenGroup also posts one line in your server's LookingForGroup channel, so players without the addon see it too. It's posted once, not repeated.", 1, 1, 1, true)
+	GameTooltip:SetText("Also list in the game's Group Finder")
+	GameTooltip:AddLine("When you list for a dungeon or another activity the game knows, OpenGroup lists you in the game's own Group Finder too, so players without the addon on your server see it. Leave takes it down again. Solo or as the group's leader only; quests, summons and battleground queues stay OpenGroup-only.", 1, 1, 1, true)
+	GameTooltip:AddLine("To post a line in LookingForGroup chat, click Post in LFG on the listed bar.", .7, .7, .7, true)
 	GameTooltip:Show()
 end)
 lfgPost:SetScript("OnLeave", GameTooltip_Hide)
@@ -1541,7 +1542,7 @@ local function paintRoles()
 			and "Stand at a battlemaster. Invite whoever asks and click Join as Group; their queue pops wherever they are."
 			or "Someone at a battlemaster invites you and queues the group, so you can stay out in the world.")
 		tellParty:Hide() tellLabel:Hide()
-		lfgPost:SetChecked(db().postLFG ~= false)
+		lfgPost:SetChecked(db().gameList ~= false)
 		for _, b in pairs(roleButtons) do b:Show() end
 		paintSpots(false) paintAuto(false)
 		roleHint:ClearAllPoints() roleHint:SetPoint("TOPLEFT", roleButtons[P.DAMAGE], "TOPRIGHT", 22, -2)  roleHint:SetWidth(300) roleHint:SetWordWrap(true)
@@ -1558,7 +1559,7 @@ local function paintRoles()
 	local solo = GetNumGroupMembers() <= 1
 	tellParty:SetShown(not solo) tellLabel:SetShown(not solo)
 	tellParty:SetChecked(db().tellParty ~= false)
-	lfgPost:SetChecked(db().postLFG ~= false)
+	lfgPost:SetChecked(db().gameList ~= false)
 	roleTitle:SetText(solo and "Your roles" or "Looking for")
 	if step2 and step2.noteLabel then
 		step2.noteLabel:SetText(solo and "About you" or "Note")
@@ -2185,15 +2186,17 @@ local delistBtn = CreateFrame("Button", nil, list.footer, "UIPanelButtonTemplate
 delistBtn:SetSize(90, 24)
 delistBtn:SetPoint("RIGHT", listBtn, "LEFT", -6, 0)
 delistBtn:SetText("Delist")
-delistBtn:SetScript("OnClick", function() L.delist() end)
+delistBtn:SetScript("OnClick", function() if OpenGroup_Nearby then OpenGroup_Nearby.gameUnlist() end L.delist() end)
 local listStatus = list.footer:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 listStatus:SetPoint("LEFT", backBtn, "RIGHT", 10, 0)
 listStatus:SetPoint("RIGHT", delistBtn, "LEFT", -10, 0)
 listStatus:SetJustifyH("LEFT")
 listStatus:SetWordWrap(false)
 
+-- the List click: our listing (hidden whispers, no click needed) and, for activities the game knows,
+-- the game's own Group Finder listing: the click's one restricted call, so nothing else here
+-- (no /who, no chat channel post)
 listBtn:SetScript("OnClick", function()
-	L.scan.auto(false)
 	noteBox:ClearFocus() titleBox:ClearFocus() destBox:ClearFocus()
 	local cc = draft.cat and A.category(draft.cat)
 	local kind = catKind(cc)
@@ -2235,6 +2238,9 @@ listBtn:SetScript("OnClick", function()
 	local wireCat = (c and not c.fallback) and c.id or 0
 	if L.post(title, draft.note, draft.need, wireCat, draft.acts, nil, nil, gs) then
 		db().draft = { cat = draft.cat, acts = { unpack(draft.acts) }, need = draft.need, note = draft.note, title = draft.title }
+		if c and not c.fallback and #draft.acts > 0 and OpenGroup_Nearby then
+			OpenGroup_Nearby.gameList(draft.acts, draft.need, GetNumGroupMembers() <= 1)
+		end
 	end
 end)
 
@@ -2255,7 +2261,8 @@ function list.refresh()
 		listBtn:SetEnabled(false)
 		listStatus:SetText(GREEN .. g.leader .. " is listing this group|r" .. GREY .. "  for " .. L.titleOf(g.l) .. "|r")
 	elseif L.mine then
-		listStatus:SetText(GREEN .. "Listed|r" .. GREY .. "  on every server you can reach|r")
+		local inGame = OpenGroup_Nearby and OpenGroup_Nearby.game.listed
+		listStatus:SetText(GREEN .. "Listed|r" .. GREY .. "  on every server you can reach" .. (inGame and ", and in the game's Group Finder" or "") .. "|r")
 	elseif peers == 0 then
 		listStatus:SetText(GREY .. "No OpenGroup players known yet: see Network.|r")
 	else
@@ -2663,7 +2670,7 @@ qbar.leave = CreateFrame("Button", nil, qbar, "UIPanelButtonTemplate")
 qbar.leave:SetSize(72, 22)
 qbar.leave:SetPoint("RIGHT", -10, 0)
 qbar.leave:SetText("Leave")
-qbar.leave:SetScript("OnClick", function() L.delist() end)
+qbar.leave:SetScript("OnClick", function() if OpenGroup_Nearby then OpenGroup_Nearby.gameUnlist() end L.delist() end)
 -- auto invite: turns it on and off (groups only); the label says whether it's running
 qbar.auto = CreateFrame("Button", nil, qbar, "UIPanelButtonTemplate")
 qbar.auto:SetSize(92, 22)
@@ -2674,6 +2681,18 @@ qbar.auto:SetScript("OnClick", function() if OpenGroup_AutoInvite then OpenGroup
 qbar.find = CreateFrame("Button", nil, qbar, "UIPanelButtonTemplate")
 qbar.find:SetSize(92, 22)
 qbar.find:SetPoint("RIGHT", qbar.auto, "LEFT", -6, 0)
+-- one line in LookingForGroup chat, its own click (the game wants one for chat channels)
+qbar.lfg = CreateFrame("Button", nil, qbar, "UIPanelButtonTemplate")
+qbar.lfg:SetSize(92, 22)
+qbar.lfg:SetText("Post in LFG")
+qbar.lfg:SetScript("OnClick", function() if L.postLFGNow then L.postLFGNow() end end)
+qbar.lfg:SetScript("OnEnter", function(self)
+	GameTooltip:SetOwner(self, "ANCHOR_TOP")
+	GameTooltip:SetText("Post in LFG chat")
+	GameTooltip:AddLine("Posts one line about your listing in your LookingForGroup channel, so players without OpenGroup see it. Each click posts once.", 1, 1, 1, true)
+	GameTooltip:Show()
+end)
+qbar.lfg:SetScript("OnLeave", GameTooltip_Hide)
 qbar.find:SetText("Find players")
 qbar.find:SetScript("OnClick", function()
 	local spots = L.mine and type(L.mine.spots) == "table" and L.mine.spots or {}
@@ -2683,7 +2702,7 @@ qbar.roles = {}
 for i = 3, 1, -1 do
 	local t = qbar:CreateTexture(nil, "OVERLAY")
 	t:SetSize(26, 26)
-	if i == 3 then t:SetPoint("RIGHT", qbar.find, "LEFT", -10, 0) else t:SetPoint("RIGHT", qbar.roles[i + 1], "LEFT", -2, 0) end
+	if i == 3 then t:SetPoint("RIGHT", qbar.lfg, "LEFT", -10, 0) else t:SetPoint("RIGHT", qbar.roles[i + 1], "LEFT", -2, 0) end
 	qbar.roles[i] = t
 end
 qbar.title:SetPoint("RIGHT", qbar.roles[1], "LEFT", -10, 0)
@@ -2729,6 +2748,9 @@ local function paintQueueBar()
 	qbar.leave:SetShown(not member)
 	qbar.auto:SetShown(not summon and not bgq and not solo and not member)
 	qbar.find:SetShown(not summon and not bgq and not solo and not member)
+	qbar.lfg:ClearAllPoints()
+	qbar.lfg:SetPoint("RIGHT", qbar.find:IsShown() and qbar.find or qbar.auto:IsShown() and qbar.auto or qbar.leave, "LEFT", -6, 0)
+	qbar.lfg:SetShown(not member)
 	qbar.auto:SetText(AI and AI.on and (GREEN .. "Auto: On|r") or "Auto Invite")
 end
 
@@ -2861,11 +2883,13 @@ local function lfgLine(m)
 	end
 	return ("LFM %s%s, whisper me!%s"):format(chatTitle(m), roles and (", need " .. roles) or "", tag)
 end
+-- from the Post in LFG click only
 local function postToLFG()
-	if db().postLFG == false or not L.mine or not OpenGroup_Nearby then return end
+	if not L.mine or not OpenGroup_Nearby then return end
 	local ok, why = OpenGroup_Nearby.post(lfgLine(L.mine))
-	if not ok and why then L.print(why) end
+	if ok then L.print("posted in LookingForGroup.") elseif why then L.print(why) end
 end
+L.postLFGNow = postToLFG
 
 local lastTitle
 local function rememberListing(m)
@@ -2891,7 +2915,6 @@ L.onListed = function(first)
 	local quest = L.mine and (L.mine.quest or 0) > 0
 	if first then
 		announceToGroup()
-		postToLFG()
 		OpenGroup_Alert.show({
 			head = "OpenGroup",
 			small = summon and "Summons listed" or bgq and (L.mine.cat == P.BGQ_OFFER and "Offering battleground queues" or "Asked for a battleground queue")

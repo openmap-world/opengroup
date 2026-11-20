@@ -319,7 +319,7 @@ N.expire()
 check("switching off clears", next(OpenGroup.nearby) == nil)
 -- a blocked action right after our search is the search: searches stop; another addon's block is ignored
 OpenGroup.print = function(...) PRINTED[#PRINTED+1] = table.concat({...}, " ") end
-local onEvent = NB_HANDLERS[#NB_HANDLERS]
+local onEvent = N.onEvent or NB_HANDLERS[#NB_HANDLERS]
 onEvent(nil, "ADDON_ACTION_BLOCKED", "SomeOtherAddon", "UNKNOWN()")
 check("other addons' blocks ignored", N.blocked == nil and not N.noSearch)
 N.searchAt, NB_T = 100, 100.2

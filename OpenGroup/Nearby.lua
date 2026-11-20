@@ -418,7 +418,7 @@ f:RegisterEvent("LFG_LIST_SEARCH_RESULT_UPDATED")
 f:RegisterEvent("LFG_LIST_SEARCH_FAILED")
 f:RegisterEvent("ADDON_ACTION_BLOCKED")
 f:RegisterEvent("ADDON_ACTION_FORBIDDEN")
-f:SetScript("OnEvent", function(_, ev, ...)
+N.onEvent = function(_, ev, ...)
 	if ev == "CHAT_MSG_CHANNEL" then
 		local text, author, _, chanName, _, _, _, _, baseName, _, _, guid = ...
 		pcall(N.onChat, text, author, chanName, baseName, guid)
@@ -440,7 +440,10 @@ f:SetScript("OnEvent", function(_, ev, ...)
 			local S, t = L.scan, GetTime()
 			local whoRecent = S and S.whoAt and t - S.whoAt <= 0.5
 			local searchRecent = N.searchAt and t - N.searchAt <= 0.5
-			if N.blocked:find("SendWho") or (whoRecent and (not searchRecent or S.whoAt >= N.searchAt)) then
+			local gp = N.game and (N.game.pending and N.game.pending.at or N.game.refused)
+			if N.blocked:find("Listing") or (gp and t - gp <= 3) then
+				-- our listing in the game's Group Finder: N.onGameEvent says so
+			elseif N.blocked:find("SendWho") or (whoRecent and (not searchRecent or S.whoAt >= N.searchAt)) then
 				N.blocked = "C_FriendList.SendWho"
 				if S and not S.noWho then L.print("the game didn't allow OpenGroup's /who search, so it won't run it again this session.") end
 				if S then S.noWho = true end
@@ -455,7 +458,8 @@ f:SetScript("OnEvent", function(_, ev, ...)
 			end
 		end
 	end
-end)
+end
+f:SetScript("OnEvent", N.onEvent)
 
 function N.expire()
 	local now, gone = clock(), false
@@ -769,4 +773,98 @@ end
 if C_Timer and C_Timer.NewTicker then
 	C_Timer.NewTicker(REPORT_EVERY, function() pcall(N.report) end)
 	C_Timer.NewTicker(30, function() pcall(N.expireRemote) end)
+end
+
+-- --------------------------------------------------------------------------------------------
+-- Listing in the game's own Group Finder too, so players without OpenGroup see it (on your server
+-- shard only; that's as far as the game's list reaches). Same calls as the game's Post button
+-- (Blizzard_LFGVanilla_Listing.lua, CreateOrUpdateListing): activities and the new-player flag,
+-- no text; roles saved separately. The game wants a click for these, so they're only called
+-- from OpenGroup's List / Update / Leave clicks, directly and once per click (nothing else
+-- restricted in the same click). Solo players and group leaders only.
+-- Saved: OpenGroupDB.gameList (nil = on).
+N.game = { pending = nil, listed = false, refused = nil }
+function N.gameListOn() return not (type(OpenGroupDB) == "table" and OpenGroupDB.gameList == false) end
+function N.canGameList()
+	if not (C_LFGList and C_LFGList.CreateListing) then return false end
+	if (GetNumGroupMembers and GetNumGroupMembers() or 0) > 1 and UnitIsGroupLeader and not UnitIsGroupLeader("player") then return false end
+	return true
+end
+-- the activities the game knows, from a listing's (at most 3, like the game's own picker allows)
+function N.gameActs(acts)
+	local out = {}
+	for _, id in ipairs(acts or {}) do
+		if type(id) == "number" and id > 0 and C_LFGList.GetActivityInfoTable then
+			local ok, t = pcall(C_LFGList.GetActivityInfoTable, id)
+			if ok and type(t) == "table" and #out < 3 then out[#out + 1] = id end
+		end
+	end
+	return out
+end
+-- from a click: create or update the game's listing for these activities. need = our role bits
+-- (solo: the roles you play). Returns true when the call was made.
+function N.gameList(acts, need, solo)
+	if not N.gameListOn() or not N.canGameList() then return false end
+	local ids = N.gameActs(acts)
+	if #ids == 0 then return false end
+	-- solo: the game lists you with the roles saved in its window; set them only when they differ
+	if solo and C_LFGListRoles and C_LFGListRoles.SetRoles then
+		local want = { tank = (need or 0) % 2 >= 1, healer = (need or 0) % 4 >= 2, dps = (need or 0) % 8 >= 4 }
+		local ok, have = false, nil
+		if C_LFGListRoles.GetRoles then ok, have = pcall(C_LFGListRoles.GetRoles) end
+		local same = ok and type(have) == "table" and (not have.tank) == (not want.tank) and (not have.healer) == (not want.healer) and (not have.dps) == (not want.dps)
+		if not same then pcall(C_LFGListRoles.SetRoles, want) end
+	end
+	local update = false
+	if C_LFGList.HasActiveEntryInfo then
+		local ok, v = pcall(C_LFGList.HasActiveEntryInfo)
+		update = ok and v == true
+	end
+	N.game.pending, N.game.refused, N.game.ours = { at = GetTime(), update = update }, nil, true
+	if update then
+		C_LFGList.UpdateListing({ activityIDs = ids, newPlayerFriendly = false })
+	else
+		C_LFGList.CreateListing({ activityIDs = ids, newPlayerFriendly = false })
+	end
+	return true
+end
+-- from a click (Leave / Delist): take the game's listing down, if there is one
+function N.gameUnlist()
+	-- only a listing OpenGroup made: one the player made in the game's window is theirs to remove
+	if not N.game.ours or not (C_LFGList and C_LFGList.RemoveListing) or not N.canGameList() then return false end
+	local has = false
+	if C_LFGList.HasActiveEntryInfo then
+		local ok, v = pcall(C_LFGList.HasActiveEntryInfo)
+		has = ok and v == true
+	end
+	if not has then return false end
+	N.game.pending, N.game.ours = { at = GetTime(), remove = true }, nil
+	C_LFGList.RemoveListing()
+	return true
+end
+-- what the game said: listed, taken down, or refused (the addon isn't allowed to)
+function N.onGameEvent(ev, addon)
+	local p = N.game.pending
+	if ev == "LFG_LIST_ACTIVE_ENTRY_UPDATE" then
+		local has = false
+		if C_LFGList.HasActiveEntryInfo then local ok, v = pcall(C_LFGList.HasActiveEntryInfo) has = ok and v == true end
+		local was = N.game.listed
+		N.game.listed = has
+		if p and GetTime() - p.at < 10 then
+			N.game.pending = nil
+			if has and not p.remove then L.print(p.update and "your listing in the game's Group Finder is updated." or "also listed in the game's Group Finder (players without OpenGroup on your server see it).")
+			elseif not has and p.remove then L.print("taken off the game's Group Finder.") end
+		end
+		if was ~= has then changed() end
+	elseif (ev == "ADDON_ACTION_BLOCKED" or ev == "ADDON_ACTION_FORBIDDEN") and addon == "OpenGroup" and p and GetTime() - p.at < 3 then
+		N.game.pending = nil
+		N.game.refused = GetTime()
+		L.print("the game refused OpenGroup's listing in its Group Finder. Your OpenGroup listing is out anyway; to be in the game's list too, use its Group Finder window.")
+		changed()
+	end
+end
+if CreateFrame then
+	local gfEv = CreateFrame("Frame")
+	for _, ev in ipairs({ "LFG_LIST_ACTIVE_ENTRY_UPDATE", "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN" }) do pcall(gfEv.RegisterEvent, gfEv, ev) end
+	gfEv:SetScript("OnEvent", function(_, ev, a1) pcall(N.onGameEvent, ev, a1) end)
 end
