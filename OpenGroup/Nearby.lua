@@ -437,8 +437,45 @@ N.stats.harvested, N.stats.reported, N.stats.remoteBy = 0, 0, {}
 -- how many passed-on groups we already had in our own Group Finder results: if the game's Group
 -- Finder turns out to be shared between shards, this is near 100% and the sharing adds nothing
 N.stats.overlapSeen, N.stats.overlapTotal = 0, 0
+N.stats.overlapBy = {}    -- [shard] = { seen, total } from that shard's latest complete digest
+
+-- "shard 56 100% (30 groups), shard 12 0% (18 groups)", or nil before any digest
+function N.overlapText()
+	local list = {}
+	for shard, o in pairs(N.stats.overlapBy) do list[#list + 1] = { shard = shard, o = o } end
+	if #list == 0 then return nil end
+	table.sort(list, function(a, b) return a.shard < b.shard end)
+	local out = {}
+	for _, e in ipairs(list) do
+		out[#out + 1] = ("shard %d %d%% (%d %s)"):format(e.shard, e.o.total > 0 and math.floor(100 * e.o.seen / e.o.total + 0.5) or 0, e.o.total, e.o.total == 1 and "group" or "groups")
+	end
+	return table.concat(out, ", ")
+end
 local REPORT_EVERY, CLAIM_KEEP, REMOTE_KEEP, MAX_TARGETS = 90, 150, 300, 8
+local CHAT_SHARE_KEEP = 600   -- a passed-on chat post, this long
+N.stats.chatShared, N.stats.chatBy = 0, {}
 local digestSeq = 0
+local chatPartial = {}
+
+-- "Share LFG chat from my shard": on unless turned off
+function N.shareChat() return not (type(OpenGroupDB) == "table" and OpenGroupDB.shareChat == false) end
+
+-- our shard's recent LookingForGroup posts worth passing on: newest first, not OpenGroup users
+function N.chatItems()
+	local items, t = {}, clock()
+	for name, l in pairs(L.nearby) do
+		if l.src == "chat" and t - (l.got or 0) < CHAT_SHARE_KEEP and not L.listings[name] and not L.peers[name] then
+			local text = (l.note ~= "" and l.note) or l.title or ""
+			if text ~= "" then
+				items[#items + 1] = { leader = name, age = math.max(0, t - (l.got or t)), act = (l.acts or {})[1] or 0,
+					need = l.need or 0, size = l.size or 1, text = text, got = l.got or 0 }
+			end
+		end
+	end
+	table.sort(items, function(a, b) return a.got > b.got end)
+	while #items > P.MAX_CHAT do table.remove(items) end
+	return items
+end
 local partial = {}        -- [reporter] = { digest, seen = { [leader] = true }, parts = n }
 
 -- our shard's Group Finder groups worth passing on: fresh, not OpenGroup users (they travel themselves)
@@ -469,9 +506,10 @@ local turn = 0
 function N.report()
 	if not enabled() or not L.shard or L.shard() <= 0 then return false end
 	local fresh = N.resultsAt and GetTime() - N.resultsAt < FINDER_KEEP
-	if not N.shouldReport(L.me() or "", N.claims, clock(), fresh) then return false end
-	local items = N.digestItems()
-	if #items == 0 then return false end
+	local items = fresh and N.digestItems() or {}
+	local posts = N.shareChat() and N.chatItems() or {}
+	if not N.shouldReport(L.me() or "", N.claims, clock(), #items > 0 or #posts > 0) then return false end
+	if #items == 0 and #posts == 0 then return false end
 	local mine, far, near = L.shard(), {}, {}
 	for name, p in pairs(L.live()) do
 		if (p.shard or 0) > 0 and p.shard ~= mine then far[#far + 1] = name
@@ -480,7 +518,9 @@ function N.report()
 	if #far == 0 then return false end
 	table.sort(far)
 	digestSeq = digestSeq + 1
-	local msgs = P.finderDigest(mine, digestSeq, items)
+	local msgs = {}
+	if #items > 0 then for _, m in ipairs(P.finderDigest(mine, digestSeq, items)) do msgs[#msgs + 1] = m end end
+	if #posts > 0 then for _, m in ipairs(P.chatDigest(mine, digestSeq, posts)) do msgs[#msgs + 1] = m end end
 	-- a few other-shard players each round, taking turns
 	for i = 1, math.min(MAX_TARGETS, #far) do
 		turn = turn % #far + 1
@@ -488,8 +528,9 @@ function N.report()
 	end
 	-- tell the others on our shard that we report, so they stand by
 	table.sort(near)
-	for i = 1, math.min(10, #near) do L.send(near[i], P.reporting(#items), true) end
+	for i = 1, math.min(10, #near) do L.send(near[i], P.reporting(#items + #posts), true) end
 	N.stats.reported = N.stats.reported + #items
+	N.stats.chatShared = N.stats.chatShared + #posts
 	return true
 end
 
@@ -503,13 +544,14 @@ L.onFinderDigest = function(sender, d)
 	local t = clock()
 	local reporter = L.short(sender)
 	local pend = partial[reporter]
-	if not pend or pend.digest ~= d.digest then pend = { digest = d.digest, seen = {}, got = 0 } partial[reporter] = pend end
+	if not pend or pend.digest ~= d.digest then pend = { digest = d.digest, seen = {}, got = 0, ovSeen = 0, ovTotal = 0 } partial[reporter] = pend end
 	pend.got = pend.got + 1
 	for _, it in ipairs(d.items) do
 		local name = it.leader
 		local mine = L.nearby[name]
 		N.stats.overlapTotal = N.stats.overlapTotal + 1
-		if mine and mine.src == "finder" then N.stats.overlapSeen = N.stats.overlapSeen + 1 end
+		pend.ovTotal = pend.ovTotal + 1
+		if mine and mine.src == "finder" then N.stats.overlapSeen = N.stats.overlapSeen + 1 pend.ovSeen = pend.ovSeen + 1 end
 		-- someone OpenGroup knows directly, or in our own results, is shown from there instead
 		if not L.isMe(name) and not L.listings[name] and not L.nearby[name] and not (L.ignored and L.ignored(name)) then
 			L.remote[name] = {
@@ -524,12 +566,48 @@ L.onFinderDigest = function(sender, d)
 	if d.part == d.parts then
 		local n = 0
 		for name, r in pairs(L.remote) do
-			if r.reporter == reporter then
+			if r.reporter == reporter and r.src == "remote" then
 				if not pend.seen[name] then L.remote[name] = nil else n = n + 1 end
 			end
 		end
 		N.stats.remoteBy[d.shard] = n
+		N.stats.overlapBy[d.shard] = { seen = pend.ovSeen, total = pend.ovTotal }
 		partial[reporter] = nil
+	end
+	changed()
+end
+
+-- another shard's LookingForGroup posts: kept like its Group Finder groups, as "LFG <shard>" rows
+L.onChatDigest = function(sender, d)
+	if d.shard <= 0 or d.shard == L.shard() then return end
+	local t = clock()
+	local reporter = L.short(sender)
+	local pend = chatPartial[reporter]
+	if not pend or pend.digest ~= d.digest then pend = { digest = d.digest, seen = {} } chatPartial[reporter] = pend end
+	for _, it in ipairs(d.items) do
+		local name = it.leader
+		local held = L.remote[name]
+		if not L.isMe(name) and not L.listings[name] and not L.nearby[name] and not (L.ignored and L.ignored(name))
+			and not (held and held.src == "remote") then   -- a Group Finder group of theirs says more
+			local matched = it.act > 0
+			L.remote[name] = {
+				leader = name, src = "remotechat", shard = d.shard, reporter = reporter, digest = d.digest, chan = "LFG",
+				size = it.size, need = it.need, acts = matched and { it.act } or {}, cat = catOf({ it.act }),
+				level = 0, got = t - it.age, seq = 0, hops = 0, price = 0, quest = 0,
+				title = matched and "" or it.text:sub(1, 70), note = matched and it.text or "",
+			}
+			pend.seen[name] = true
+		end
+	end
+	if d.part == d.parts then
+		local n = 0
+		for name, r in pairs(L.remote) do
+			if r.reporter == reporter and r.src == "remotechat" then
+				if not pend.seen[name] then L.remote[name] = nil else n = n + 1 end
+			end
+		end
+		N.stats.chatBy[d.shard] = n
+		chatPartial[reporter] = nil
 	end
 	changed()
 end
@@ -537,7 +615,7 @@ end
 function N.expireRemote()
 	local t, gone = clock(), false
 	for name, r in pairs(L.remote) do
-		if t - (r.got or 0) > REMOTE_KEEP then L.remote[name] = nil gone = true end
+		if t - (r.got or 0) > (r.src == "remotechat" and CHAT_SHARE_KEEP or REMOTE_KEEP) then L.remote[name] = nil gone = true end
 	end
 	for name, at in pairs(N.claims) do if t - at > CLAIM_KEEP then N.claims[name] = nil end end
 	if not enabled() and next(L.remote) then L.remote = {} gone = true end

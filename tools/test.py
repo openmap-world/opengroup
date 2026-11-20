@@ -67,6 +67,11 @@ check("digest parts under the limit", okLen and #msgs > 1)
 check("digest round trip with spaced names", #back == 60 and back[1].leader == "Leader Number1" and back[60].act == 90 and back[60].age == 60)
 check("digest caps at 60", (function() local big = {} for i = 1, 80 do big[i] = { leader = "L" .. i, act = 1, size = 1, need = 1, age = 0 } end
   local n = 0 for _, m in ipairs(P.finderDigest(1, 1, big)) do n = n + #select(2, P.parse(m)).items end return n == 60 end)())
+local posts = {}
+for i = 1, 30 do posts[i] = { leader = "Poster Name" .. i, age = i, act = (i % 2 == 0) and 30 or 0, need = 2, size = 1, text = "LF tank~healer ^ for BRD run number " .. i } end
+local cm, cback, cLen = P.chatDigest(56, 3, posts), {}, true
+for _, m in ipairs(cm) do if #m > 250 then cLen = false end local k, d = P.parse(m) if k == "C1" then for _, it in ipairs(d.items) do cback[#cback+1] = it end end end
+check("chat digest round trip, separators stripped", cLen and #cback == 30 and cback[1].leader == "Poster Name1" and not cback[1].text:find("[~%^]") and cback[2].act == 30)
 check("reporting claim", P.parse(P.reporting(12)) == "R1" and select(2, P.parse(P.reporting(12))).groups == 12)
 check("bg queue roundtrip", kb == "L1" and lb.cat == P.BGQ_OFFER and lb.acts[1] == 40 and P.isBGQ(lb.cat) and not P.isBGQ(2))
 -- open spots

@@ -391,6 +391,9 @@ function L.receive(msg, sender)
 		-- another shard's Group Finder groups (Nearby keeps them)
 		if L.peers[sender] then L.peers[sender].seen = now() end
 		if L.onFinderDigest then pcall(L.onFinderDigest, sender, d) end
+	elseif kind == "C1" then
+		if L.peers[sender] then L.peers[sender].seen = now() end
+		if L.onChatDigest then pcall(L.onChatDigest, sender, d) end
 	elseif kind == "R1" then
 		if L.onReporter then pcall(L.onReporter, sender, d) end
 	elseif kind == "J1" then
@@ -745,7 +748,9 @@ function L.rowOf(l, myShard)
 	local r = { l = l, leader = l.leader or "?", class = l.class, level = l.level or 0, size = l.size or 1,
 		need = l.need or 0, spots = l.spots, note = l.note or "", got = l.got or 0, shard = l.shard or 0, cat = l.cat or 0 }
 	r.where = l.src == "finder" and "finder" or l.src == "chat" and "chat" or (l.shard == myShard and "mine" or "other")
-	r.remote = l.src == "remote"   -- another shard's Group Finder, passed on by an OpenGroup player there
+	-- another shard's Group Finder group or LFG post, passed on by an OpenGroup player there
+	r.remote = l.src == "remote" or l.src == "remotechat"
+	r.gf, r.chatPost = l.src == "remote", l.src == "remotechat"
 	r.kind = l.cat == P.SUMMON_CAT and "summon" or P.isBGQ(l.cat) and "bgq" or (r.size > 1 and "group" or "player")
 	-- the activity: the first one we know names it; the level range covers all of them
 	local min, max
@@ -816,6 +821,9 @@ local WHERE_ORDER = { other = 1, mine = 2, finder = 3, chat = 4 }
 function L.whereOK(r, where)
 	if not where or where == "all" then return true end
 	if where == "og" then return (r.where == "other" or r.where == "mine") and not r.remote end
+	-- the Group Finder and LFG chat filters take in other shards' too
+	if where == "finder" then return r.where == "finder" or r.gf == true end
+	if where == "chat" then return r.where == "chat" or r.chatPost == true end
 	return r.where == where
 end
 

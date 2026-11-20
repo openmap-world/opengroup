@@ -357,6 +357,8 @@ OpenGroup.nearby["Seen Here"] = { leader = "Seen Here", src = "finder", size = 2
 local ov0 = N.stats.overlapSeen
 for _, m in ipairs(Pr.finderDigest(56, 9, { { leader = "Seen Here", act = 30, size = 2, need = 4, age = 1 }, { leader = "Far Away", act = 30, size = 4, need = 4, age = 1 } })) do OpenGroup.receive(m, "Rep R") end
 assert(OpenGroup.remote["Seen Here"] == nil and N.stats.overlapSeen == ov0 + 1, "local results win, overlap counted")
+print("overlap by shard:", N.overlapText())
+assert(N.overlapText() == "shard 56 50% (2 groups)", "overlap per shard, from the latest digest")
 OpenGroup.nearby["Seen Here"] = nil
 -- our own shard's digest is ignored; 5 minutes on, the rest expire
 for _, m in ipairs(Pr.finderDigest(47, 3, { { leader = "Home Group", act = 30, size = 2, need = 4, age = 1 } })) do OpenGroup.receive(m, "Rep R") end
@@ -377,6 +379,37 @@ local q0 = OpenGroup.queued()
 assert(N.report() == true, "we report our shard")
 print("report queued:", OpenGroup.queued() - q0, "| harvested:", N.stats.harvested)
 assert(OpenGroup.queued() - q0 >= 2 and N.stats.harvested == 1, "a digest to the other shard and a claim to ours")
+-- another shard's LFG chat: rows "LFG 56", repeats collapse, the next digest and time clear them
+OpenGroup.remote = {}
+local c1 = Pr.chatDigest(56, 4, { { leader = "Chat Poster", age = 10, act = 0, need = 1, size = 1, text = "LFM ZF need tank" },
+  { leader = "Chat Poster", age = 5, act = 0, need = 1, size = 1, text = "LFM ZF need tank, 4/5" }, { leader = "Other Poster", age = 3, act = 30, need = 4, size = 3, text = "BRD lava run need dps" } })
+local d0 = OpenGroup.stats.dropped or 0
+for _, m in ipairs(c1) do OpenGroup.receive(m, "Rep R") end
+local cp = OpenGroup.remote["Chat Poster"]
+assert(cp and cp.src == "remotechat" and cp.shard == 56 and OpenGroup.remote["Other Poster"].acts[1] == 30, "chat posts kept, matched ones with their dungeon")
+local n = 0 for _, r in pairs(OpenGroup.remote) do if r.leader == "Chat Poster" then n = n + 1 end end
+assert(n == 1, "repeats collapse into one row")
+OpenGroupDB.where = "chat" OpenGroupDB.allLevels = true SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+local inChat = false
+for _, d in ipairs(PROVIDED) do if d.l and d.l.leader == "Chat Poster" then inChat = d.r.chatPost
+  local row = CreateFrame("Button") row.built=false INIT(row, d) row.scripts.OnEnter(row) end end
+assert(inChat, "the LFG chat filter takes in other shards' posts")
+OpenGroupDB.where = "all"
+for _, m in ipairs(Pr.chatDigest(56, 5, { { leader = "Other Poster", age = 1, act = 30, need = 4, size = 3, text = "BRD lava run need dps" } })) do OpenGroup.receive(m, "Rep R") end
+assert(OpenGroup.remote["Chat Poster"] == nil and OpenGroup.remote["Other Poster"], "the next digest replaces the last")
+CLOCK = CLOCK + 700 N.expireRemote()
+assert(next(OpenGroup.remote) == nil, "chat posts expire after 10 minutes")
+assert((OpenGroup.stats.dropped or 0) == d0, "chat digests don't trip the message budget")
+-- sending: our shard's chat rows go out unless the setting is off
+OpenGroup.nearby = {}
+OpenGroup.nearby["Here Poster"] = { leader = "Here Poster", src = "chat", size = 1, need = 1, acts = {}, got = CLOCK, level = 0, shard = 47, title = "LFG strat as healer", note = "" }
+OpenGroup.peers["Rep R"].seen = CLOCK N.resultsAt = nil N.claims = {}
+local s0 = N.stats.chatShared
+assert(N.report() == true and N.stats.chatShared == s0 + 1, "our LFG posts are passed on")
+OpenGroupDB.shareChat = false
+assert(N.report() == false and N.stats.chatShared == s0 + 1, "the setting turns it off")
+OpenGroupDB.shareChat = nil
+print("other shards' LFG chat ok")
 print("other shards' Group Finder ok")
 -- pinging yourself sends nothing
 OpenGroup.pings = {}

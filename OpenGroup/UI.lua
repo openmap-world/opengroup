@@ -621,6 +621,7 @@ local function buildRow(row)
 		GameTooltip:AddLine(("%s%s|r%s"):format(W.classColor(l.class), L.short(l.leader), l.level > 0 and ("  level " .. l.level) or ""))
 		GameTooltip:AddLine(("Shard %d   |   %s"):format(l.shard, l.size <= 1 and "solo" or l.sizeGuess and "a group" or (l.size .. " in group")), .8, .8, .8)
 		if l.src == "remote" then GameTooltip:AddLine(("Seen in the Group Finder on shard %d by %s, %s ago"):format(l.shard, l.reporter or "?", ago(time() - (l.got or time()))), .5, .5, .5, true)
+		elseif l.src == "remotechat" then GameTooltip:AddLine(("Posted in LookingForGroup on shard %d, passed on by %s, %s ago"):format(l.shard, l.reporter or "?", ago(time() - (l.got or time()))), .5, .5, .5, true)
 		elseif l.src == "finder" then GameTooltip:AddLine("Listed in the game's Group Finder (your shard only)", .5, .5, .5)
 		elseif l.src == "chat" then GameTooltip:AddLine(("Posted in %s chat (your shard only)"):format(l.chan or "a"), .5, .5, .5)
 		else GameTooltip:AddLine(l.hops == 0 and "Heard from them directly" or ("Passed on by %s"):format(L.short(l.via)), .5, .5, .5) end
@@ -730,7 +731,8 @@ local function fillRow(row, d)
 	row.note:SetShown(not compact and note ~= "")
 	row.shard:SetText((r.where == "finder" and (GREY .. "Group Finder|r") or r.where == "chat" and (GREY .. (l.chan or "LFG chat") .. "|r")
 		or r.where == "mine" and (GREY .. "Your shard|r") or (GOLD .. "Shard " .. l.shard .. "|r")) .. (l.unconfirmed and (GREY .. " ?|r") or "")
-		.. (r.remote and (GREY .. " GF|r") or ""))
+		.. (r.gf and (GREY .. " GF|r") or ""))
+	if r.chatPost then row.shard:SetText(GOLD .. "LFG " .. l.shard .. "|r") end
 	-- Needs: one icon per open spot (the class where one is set), else the role bits; groups show
 	-- what they want, players the roles they play
 	local icons = {}
@@ -2307,6 +2309,24 @@ scanBtn:SetText("Search now")
 scanBtn:SetScript("OnClick", function() L.scan.click() end)
 local scanSpin = W.spinner(net.content, 20)
 scanSpin:SetPoint("LEFT", scanBtn, "RIGHT", 8, 0)
+-- passing your shard's LookingForGroup posts on to OpenGroup players on other shards (on by default)
+do
+	local cb = CreateFrame("CheckButton", nil, net.content, "UICheckButtonTemplate")
+	cb:SetSize(22, 22)
+	cb:SetPoint("TOPLEFT", scanBtn, "BOTTOMLEFT", -2, -8)
+	local lbl = net.content:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+	lbl:SetPoint("LEFT", cb, "RIGHT", 2, 1)
+	lbl:SetText("Share LFG chat from my shard")
+	cb:SetScript("OnShow", function(self) self:SetChecked(db().shareChat ~= false) end)
+	cb:SetScript("OnClick", function(self) db().shareChat = self:GetChecked() and true or false end)
+	cb:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:SetText("Share LFG chat from my shard")
+		GameTooltip:AddLine("When you're the OpenGroup player passing on your shard's groups, recent LookingForGroup posts go to OpenGroup players on other shards too (the poster's name, the post and its age). Same realm and faction only.", 1, 1, 1, true)
+		GameTooltip:Show()
+	end)
+	cb:SetScript("OnLeave", GameTooltip_Hide)
+end
 local scanText = net.content:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
 scanText:SetPoint("LEFT", scanBtn, "RIGHT", 34, 0)
 scanText:SetPoint("RIGHT", net.content, "RIGHT", -16, 0)
@@ -2318,6 +2338,28 @@ peersBar:SetPoint("LEFT", net.content, "LEFT", 10, 0)
 local shardChips = net.content:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
 shardChips:SetPoint("TOPLEFT", peersBar, "BOTTOMLEFT", 6, -8)
 shardChips:SetPoint("RIGHT", net.content, "RIGHT", -16, 0)
+-- hover the shard counts: how much of each shard's Group Finder matches yours (shared or not)
+do
+	local hover = CreateFrame("Frame", nil, net.content)
+	hover:SetPoint("TOPLEFT", shardChips, "TOPLEFT", 0, 2)
+	hover:SetPoint("BOTTOMRIGHT", shardChips, "BOTTOMRIGHT", 0, -2)
+	hover:EnableMouse(true)
+	hover:SetScript("OnEnter", function(self)
+		local Nb = OpenGroup_Nearby
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:SetText("Group Finder on other shards")
+		local ov = Nb and Nb.overlapText and Nb.overlapText()
+		if ov then
+			GameTooltip:AddLine("How much of each shard's Group Finder you already see in yours:", 1, 1, 1, true)
+			for part in ov:gmatch("[^,]+") do GameTooltip:AddLine("  " .. part:gsub("^%s+", ""), .9, .9, .9) end
+			GameTooltip:AddLine("100% means that shard shares your Group Finder.", .6, .6, .6, true)
+		else
+			GameTooltip:AddLine("Nothing passed on from another shard yet.", .8, .8, .8, true)
+		end
+		GameTooltip:Show()
+	end)
+	hover:SetScript("OnLeave", GameTooltip_Hide)
+end
 shardChips:SetJustifyH("LEFT")
 local peerRows = {}
 for i = 1, 9 do
@@ -3222,9 +3264,16 @@ SlashCmdList.OPENGROUP = function(msg)
 			for shard, n in pairs(Nb.stats.remoteBy or {}) do by[#by + 1] = ("shard %d: %d"):format(shard, n) end
 			table.sort(by)
 			local tot, seen = Nb.stats.overlapTotal or 0, Nb.stats.overlapSeen or 0
+			local ov = Nb.overlapText and Nb.overlapText()
+			if ov then L.print("Group Finder matches yours: " .. ov) end
 			L.print(("other shards' Group Finder: %d groups from here to share, %d sent so far; received %s%s"):format(
 				Nb.stats.harvested or 0, Nb.stats.reported or 0, #by > 0 and table.concat(by, ", ") or "none yet",
 				tot > 0 and ("; %d%% of received were already in your own results (%d of %d)"):format(math.floor(100 * seen / tot + 0.5), seen, tot) or ""))
+			local cb2 = {}
+			for shard, n in pairs(Nb.stats.chatBy or {}) do cb2[#cb2 + 1] = ("shard %d: %d"):format(shard, n) end
+			table.sort(cb2)
+			L.print(("other shards' LFG chat: sharing %s, %d posts sent so far; received %s"):format(
+				Nb.shareChat() and "on" or "off", Nb.stats.chatShared or 0, #cb2 > 0 and table.concat(cb2, ", ") or "none yet"))
 			if Nb.blockedFrom then
 				L.print(("the search was %.2fs before the block, called from:"):format(Nb.blockedAfter or -1))
 				for line in tostring(Nb.blockedFrom):gmatch("[^\n]+") do L.print("  " .. (line:gsub("Interface[/\\]AddOns[/\\]", ""))) end

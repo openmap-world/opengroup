@@ -39,6 +39,10 @@
 --                                     <leader>/<activity>/<size>/<need>/<age>. A digest (numbered) may
 --                                     take several parts; groups missing from a reporter's latest
 --                                     complete digest are gone. These leaders don't run OpenGroup.
+--   C1;<shard>;<digest>;<part>;<parts>;<items>
+--                                     the sender's shard's recent LookingForGroup chat posts, for other
+--                                     shards: items split by "~", each <name>^<age>^<activity>^<need>^<size>^<text>
+--                                     (text cut to 100 characters, without "~" or "^")
 --   R1;<groups>                       to OpenGroup players on the same shard: "I'm reporting this
 --                                     shard's Group Finder" (one reporter per shard at a time)
 -- Fields never contain ";" or "|" (stripped on the way in and out). A message stays under 250 bytes.
@@ -151,6 +155,34 @@ function P.finderDigest(shard, digest, items)
 	for i, p in ipairs(parts) do out[i] = head .. i .. ";" .. #parts .. ";" .. table.concat(p, ",") end
 	return out
 end
+-- LFG chat digests: items = { { leader, age, act, need, size, text } }, at most P.MAX_CHAT
+P.MAX_CHAT, P.CHAT_TEXT = 30, 100
+local function chatClean(s, len) return (clean(s, len):gsub("[~%^]", " ")) end
+function P.chatDigest(shard, digest, items)
+	local entries = {}
+	for _, it in ipairs(items or {}) do
+		if #entries >= P.MAX_CHAT then break end
+		local name = chatClean(it.leader, P.NAME_LEN)
+		local text = chatClean(it.text, P.CHAT_TEXT)
+		if name ~= "" and text ~= "" then
+			entries[#entries + 1] = ("%s^%d^%d^%d^%d^%s"):format(name, int(it.age, 0, 86400) or 0, int(it.act, 0, 2^31) or 0,
+				int(it.need, 0, 7) or 0, int(it.size, 1, 40) or 1, text)
+		end
+	end
+	local head = ("C1;%d;%d;"):format(int(shard, 0, 99999) or 0, int(digest, 0, 2^31) or 0)
+	local parts, cur, len = {}, {}, 0
+	local room = P.MAX_LEN - #head - 8
+	for _, e in ipairs(entries) do
+		if #cur > 0 and len + #e + 1 > room then parts[#parts + 1] = cur cur, len = {}, 0 end
+		cur[#cur + 1] = e
+		len = len + #e + 1
+	end
+	if #cur > 0 or #parts == 0 then parts[#parts + 1] = cur end
+	local out = {}
+	for i, p in ipairs(parts) do out[i] = head .. i .. ";" .. #parts .. ";" .. table.concat(p, "~") end
+	return out
+end
+
 function P.reporting(groups) return ("R1;%d"):format(int(groups, 0, 999) or 0) end
 
 P.TANK, P.HEALER, P.DAMAGE = 1, 2, 4
@@ -347,6 +379,20 @@ function P.parse(msg)
 			act, size, need, age = int(act, 0, 2^31), int(size, 1, 40), int(need, 0, 7), int(age, 0, 86400)
 			if name ~= "" and act and size and need and age and #items < P.MAX_DIGEST then
 				items[#items + 1] = { leader = name, act = act, size = size, need = need, age = age }
+			end
+		end
+		return kind, { shard = shard, digest = digest, part = part, parts = parts, items = items }
+	elseif kind == "C1" then
+		local shard, digest = int(f[2], 0, 99999), int(f[3], 0, 2^31)
+		local part, parts = int(f[4], 1, 99), int(f[5], 1, 99)
+		if not (shard and digest and part and parts and part <= parts) then return nil end
+		local items = {}
+		for e in (f[6] or ""):gmatch("[^~]+") do
+			local name, age, act, need, size, text = e:match("^([^%^]+)%^(%d+)%^(%d+)%^(%d+)%^(%d+)%^(.+)$")
+			name, text = clean(name, P.NAME_LEN), clean(text, P.CHAT_TEXT)
+			age, act, need, size = int(age, 0, 86400), int(act, 0, 2^31), int(need, 0, 7), int(size, 1, 40)
+			if name ~= "" and text ~= "" and age and act and need and size and #items < P.MAX_CHAT then
+				items[#items + 1] = { leader = name, age = age, act = act, need = need, size = size, text = text }
 			end
 		end
 		return kind, { shard = shard, digest = digest, part = part, parts = parts, items = items }
