@@ -856,6 +856,8 @@ function L.rowOf(l, myShard, prefer)
 	end
 	if picked then r.act = picked end
 	r.actNames = table.concat(names, " ")
+	-- a chat post that named levels ("48-52", "50+") and no activity we know
+	if not min and not max and (l.lmin or 0) > 0 then min, max = l.lmin, l.lmax or 60 end
 	if (l.quest or 0) > 0 then
 		local ql = Q and Q.level and Q.level(l.quest)
 		if ql then min, max = ql, ql end

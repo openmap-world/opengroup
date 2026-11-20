@@ -20,5 +20,6 @@ jobs:
       - run: pip install lupa
       - run: python tools/test.py OpenGroup
       - run: python tools/ui_smoke.py OpenGroup
+      - run: python tools/chat_corpus.py OpenGroup --min 95
       - name: The tools at least compile
         run: python -m compileall -q tools

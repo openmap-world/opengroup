@@ -276,7 +276,7 @@ check("lf2m strat", p and p.kind == "group" and nameOf(p) == "Stratholme" and p.
 p = N.parse("LFG |cffffffff|Hitem:1|h[Dire Maul]|h|r east as tank")
 check("lfg player dme", p and p.kind == "player" and nameOf(p) == "Dire Maul" and p.need == 1 and p.size == 1)
 p = N.parse("lfm dm")
-check("dm alone is deadmines", p and nameOf(p) == "The Deadmines")
+check("dm alone at 58 is dire maul", p and nameOf(p) == "Dire Maul")
 p = N.parse("LFM DM east need tank")
 check("dm east is dire maul", p and nameOf(p) == "Dire Maul")
 check("wts skipped", N.parse("WTS [Lionheart Helm] LFM buyers") == nil)

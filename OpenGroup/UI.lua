@@ -3572,6 +3572,19 @@ SlashCmdList.OPENGROUP = function(msg)
 		L.post(rest, "", 0)
 	elseif cmd == "delist" then
 		L.delist()
+	elseif cmd == "chatlog" then
+		-- debug, off by default: keep the last 300 LookingForGroup / Trade lines and what the parser
+		-- made of them in SavedVariables (OpenGroupDB.chatlog), to tune it against real chat
+		local Nb = OpenGroup_Nearby
+		if rest == "on" then db().chatlog = { on = true, lines = (type(db().chatlog) == "table" and db().chatlog.lines) or {} } L.print("chat log on: the last 300 LFG/Trade lines are kept until /og chatlog off. /reload or log out to write them to disk.")
+		elseif rest == "off" then if type(db().chatlog) == "table" then db().chatlog.on = false end L.print("chat log off (lines kept; /og chatlog clear removes them).")
+		elseif rest == "clear" then db().chatlog = nil L.print("chat log cleared.")
+		else
+			local c = type(db().chatlog) == "table" and db().chatlog or {}
+			local n, hit = 0, 0
+			for _, e in ipairs(c.lines or {}) do n = n + 1 if e.got ~= "" then hit = hit + 1 end end
+			L.print(("chat log %s: %d lines, %d parsed as a group or player. /og chatlog on | off | clear"):format(c.on and "on" or "off", n, hit))
+		end
 	elseif cmd == "ping" and rest ~= "" then
 		L.ping(rest)
 	elseif cmd == "auto" then

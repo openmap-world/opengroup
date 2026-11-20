@@ -58,41 +58,68 @@ function N.count(src)
 end
 
 -- --------------------------------------------------------------------------------------------
--- chat: "LFM BRD need heals", "LFG strat UD as tank"
+-- chat: "LFM BRD need heals", "LF1 tank strat", "healer LFG scholo", "suche Heiler fuer BRD".
+-- tools/chat_corpus.txt holds the lines this is tuned against (tools/chat_corpus.py runs them),
+-- and "/og chatlog on" collects real ones from an evening of play.
 
--- what people type -> words in the activity's name, in English (other languages fall back to
--- matching the activity's full or short name)
+-- what people type -> a piece of the activity's (English) name; every one is matched against the
+-- activities the game actually has, so one with no such activity simply finds nothing
 local SHORT = {
-	rfc = "ragefire", wc = "wailing", vc = "deadmines", deadmines = "deadmines", dm = "deadmines",
+	rfc = "ragefire", wc = "wailing", vc = "deadmines", deadmines = "deadmines", deadmine = "deadmines",
 	sfk = "shadowfang", bfd = "blackfathom", stocks = "stockade", stockade = "stockade", stockades = "stockade",
 	gnomer = "gnomeregan", gnomeregan = "gnomeregan", rfk = "razorfen kraul", sm = "scarlet", scarlet = "scarlet",
 	rfd = "razorfen downs", ulda = "uldaman", uld = "uldaman", uldaman = "uldaman", zf = "zul'farrak",
-	mara = "maraudon", maraudon = "maraudon", st = "sunken temple", sunken = "sunken temple",
-	brd = "blackrock depths", lbrs = "lower blackrock", ubrs = "upper blackrock",
-	dme = "dire maul", dmw = "dire maul", dmn = "dire maul", dmt = "dire maul",
+	mara = "maraudon", maraudon = "maraudon", princess = "maraudon",
+	st = "sunken temple", sunken = "sunken temple",
+	brd = "blackrock depths", emp = "blackrock depths", jailbreak = "blackrock depths",
+	lbrs = "lower blackrock", ubrs = "upper blackrock",
+	dme = "dire maul", dmw = "dire maul", dmn = "dire maul", dmt = "dire maul", dire = "dire maul",
 	scholo = "scholomance", scholomance = "scholomance", strat = "stratholme", strath = "stratholme",
-	stratholme = "stratholme",
+	stratholme = "stratholme", baron = "stratholme",
+	-- raids
+	mc = "molten core", ony = "onyxia", onyxia = "onyxia", zg = "zul'gurub", bwl = "blackwing",
+	aq20 = "ahn'qiraj", aq40 = "ahn'qiraj", aq = "ahn'qiraj", naxx = "naxxramas", naxxramas = "naxxramas",
+	-- Forever's own
+	krol = "krol", kroldok = "krol", thanes = "thanes", lordaeron = "lordaeron", ruins = "lordaeron",
+	blackmaw = "blackmaw", shaper = "shaper", shapers = "shaper",
 }
+-- typed in other alphabets (matched as plain text)
+local SHORT_UTF8 = { ["\208\177\209\128\208\180"] = "blackrock depths", ["\208\145\208\160\208\148"] = "blackrock depths", ["\209\129\209\130\209\128\208\176\209\130"] = "stratholme",
+	["\208\161\209\130\209\128\208\176\209\130"] = "stratholme", ["\209\136\208\190\208\187\208\190"] = "scholomance", ["\208\168\208\190\208\187\208\190"] = "scholomance" }
 -- a wing named in the post narrows to the activities with that word in their name, if any have it
 local WINGS = {
 	lib = "library", library = "library", arm = "armory", armory = "armory", armoury = "armory",
 	cath = "cathedral", cathedral = "cathedral", gy = "graveyard", graveyard = "graveyard",
 	east = "east", west = "west", north = "north", tribute = "north",
 	dme = "east", dmw = "west", dmn = "north", dmt = "north",
+	live = "main", ud = "service", undead = "service", baron = "service",
+	princess = "inner", inner = "inner", orange = "orange", purple = "purple",
 }
-local SKIP = { "wts", "wtb", "wtt", "selling", "buying", "recruit", "recruiting", "guild", "boost", "boosting",
-	"enchanter", "enchanting", "enchants", "lfw", "crafter", "crafting", "summon", "summons", "portal", "port", "carry" }
-local GROUP_MARKS = { "lfm", "lf%dm", "need", "needs", "lf tanks?", "lf heals?", "lf healers?", "lf dps", "lf more", "looking for more" }
-local PLAYER_MARKS = { "lfg", "lf group", "lf grp", "lf party", "looking for group", "looking for a group" }
--- a plain "need ..." counts only with a dungeon or a role in it; these stand on their own
-local STRONG = { "lfm", "lf%dm", "lf more", "looking for more", "lfg", "lf group", "lf grp", "lf party", "looking for group", "looking for a group" }
+-- service and sell lines: never a group post
+local SELL = { "wts", "wtb", "wtt", "lfw", "selling", "buying", "boost", "boosts", "boosting", "carry", "carries",
+	"recruit", "recruiting", "lf guild", "lfguild", "guild lf", "apply" }
+-- these alone make a line a service ad, unless it's plainly a group post ("LFM BRD, can summon")
+local SERVICE = { "summons?", "portals?", "port", "enchanter", "enchanting", "enchants", "crafter", "crafting", "guild" }
+
+-- role words: English shorthands, and the obvious words in other languages
+local TANK_W = { "tanks?", "tnk", "mt", "prot", "tanque" }
+local HEAL_W = { "heals?", "healers?", "healz", "heala", "hps", "resto", "heiler", "soigneur", "sanador", "curandero" }
+local DPS_W = { "dps", "dd", "rdps", "mdps", "casters?", "melee", "ranged", "damage", "dmg" }
+local TANK_U = { "\209\130\208\176\208\189\208\186" }
+local HEAL_U = { "\209\133\208\184\208\187" }
+local DPS_U = { "\208\180\208\180", "\208\180\208\191\209\129" }
+-- a class asked for, when no role word says which role: the role it most likely fills
+local CLASS_ROLE = { priest = HEAL, druid = HEAL, shaman = HEAL, shammy = HEAL, paladin = HEAL, pala = HEAL, pally = HEAL,
+	mage = DPS, lock = DPS, warlock = DPS, hunter = DPS, hunt = DPS, rogue = DPS }
 
 local function has(t, pat) return t:find("%f[%w]" .. pat .. "%f[^%w]") ~= nil end
 local function any(t, list) for _, p in ipairs(list) do if has(t, p) then return true end end return false end
+local function anyPlain(t, list) for _, p in ipairs(list) do if t:find(p, 1, true) then return true end end return false end
 
+-- (spaces by hand: %s can take bytes of other alphabets, e.g. the 0xA0 inside a Cyrillic letter)
 local function clean(text)
 	return (text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|H.-|h(.-)|h", "%1"):gsub("|T.-|t", "")
-		:gsub("{.-}", ""):gsub("%s+", " "):gsub("^ ", ""):gsub(" $", ""))
+		:gsub("{.-}", ""):gsub("[%[%]]", " "):gsub("[ \t\r\n]+", " "):gsub("^ ", ""):gsub(" $", ""))
 end
 
 local function actsMatching(fragment)
@@ -104,17 +131,22 @@ local function actsMatching(fragment)
 	return out
 end
 
-local function findActs(t)
+local function findActs(t, raw)
 	local found, seen = {}, {}
 	local function add(list) for _, id in ipairs(list) do if not seen[id] then seen[id] = true found[#found + 1] = id end end end
 	local wing
+	local lvl = UnitLevel and UnitLevel("player") or 60
 	for w in t:gmatch("[%w']+") do
+		w = w:gsub("'", "")
 		local frag = SHORT[w]
-		-- "dm" alone is the Deadmines; with a direction or "tribute" it's Dire Maul
-		if w == "dm" and (has(t, "east") or has(t, "west") or has(t, "north") or has(t, "tribute")) then frag = "dire maul" end
+		-- "dm" alone: Dire Maul at 55 and up (or with a wing named), the Deadmines below
+		if w == "dm" then
+			frag = (lvl >= 55 or has(t, "east") or has(t, "west") or has(t, "north") or has(t, "tribute")) and "dire maul" or "deadmines"
+		end
 		if frag then add(actsMatching(frag)) end
 		wing = wing or WINGS[w]
 	end
+	for word, frag in pairs(SHORT_UTF8) do if raw:find(word, 1, true) then add(actsMatching(frag)) end end
 	-- the game's own names and short names, in the player's language
 	for id, i in pairs(A.info) do
 		if not seen[id] then
@@ -132,36 +164,72 @@ local function findActs(t)
 	return found
 end
 
-local function roles(t)
+local function roles(t, raw)
 	local need = 0
-	if has(t, "tanks?") then need = need + TANK end
-	if has(t, "heals?") or has(t, "healers?") or has(t, "heala") then need = need + HEAL end
-	if has(t, "dps") or has(t, "dd") or has(t, "damage") then need = need + DPS end
+	if any(t, TANK_W) or anyPlain(raw, TANK_U) then need = need + TANK end
+	if any(t, HEAL_W) or anyPlain(raw, HEAL_U) then need = need + HEAL end
+	if any(t, DPS_W) or anyPlain(raw, DPS_U) then need = need + DPS end
 	if need == 0 and (has(t, "need all") or has(t, "all roles")) then need = TANK + HEAL + DPS end
+	if need == 0 then
+		for cls, r in pairs(CLASS_ROLE) do if has(t, cls .. "s?") and need % (r * 2) < r then need = need + r end end
+	end
 	return need
 end
 
--- One chat line -> { kind = "group" | "player", acts, need, size, text } or nil. Pure, for tests.
+-- "need 2 more" / "LF1M" / "LF2" / "LFM1" -> how many they still want (1-4), or nil
+local function stillWanted(t)
+	local n = t:match("lf%s?(%d)%s?m%f[^%w]") or t:match("lfm%s?(%d)%f[^%d]") or t:match("lf(%d)%f[^%d]")
+		or t:match("need (%d) more") or t:match("%f[%w](%d) more%f[^%w]") or t:match("need (%d)%f[^%w]")
+	n = tonumber(n)
+	return n and n >= 1 and n <= 4 and n or nil
+end
+
+-- seeking players for a group / a group for oneself, in other languages (plain text)
+local SEEK_U = { "\208\184\209\137\209\131", "\208\184\209\137\208\181\208\188", "\208\189\209\131\208\182\208\181\208\189", "\208\189\209\131\208\182\208\189\208\176", "\208\189\209\131\208\182\208\189\209\139", "\208\187\209\132\208\188", "\208\152\209\137\209\131", "\208\152\209\137\208\181\208\188", "\208\157\209\131\208\182\208\181\208\189", "\208\157\209\131\208\182\208\189\208\176", "\208\157\209\131\208\182\208\189\209\139", "\208\155\208\164\208\156" }
+local SEEK = { "suche", "suchen", "such", "cherche", "recherche", "cherchons", "busco", "buscamos", "procuro", "procuramos" }
+local GROUP_WORD = { "gruppe", "grp", "groupe", "grupo", "group", "gruppo" }
+
+-- One chat line -> { kind = "group" | "player", acts, need, size, min, max, text } or nil. Pure, for tests.
 function N.parse(text)
 	if type(text) ~= "string" or #text < 3 then return nil end
 	local shown = clean(text)
 	local t = " " .. shown:lower() .. " "
-	if any(t, SKIP) then return nil end
-	local group = any(t, GROUP_MARKS)
-	local player = not group and any(t, PLAYER_MARKS)
+	if any(t, SELL) then return nil end
+	local lfRole = has(t, "lf") and (any(t, TANK_W) or any(t, HEAL_W) or any(t, DPS_W)) and t:find("lf%s+%a") ~= nil
+	local lfClass = false
+	for cls in pairs(CLASS_ROLE) do if has(t, "lf " .. cls) or has(t, "need " .. cls) then lfClass = true end end
+	local n = stillWanted(t)
+	local seek = any(t, SEEK) or anyPlain(shown, SEEK_U)
+	local seekGroup = seek and any(t, GROUP_WORD)
+	local player = any(t, { "lfg", "lf group", "lf grp", "lf party", "looking for group", "looking for a group" })
+		or seekGroup or (has(t, "sucht") and any(t, GROUP_WORD))
+	local group = not player and (any(t, { "lfm", "lf more", "looking for more", "need", "needs" }) or n ~= nil
+		or lfRole or lfClass or t:find("%d%s*/%s*%d") ~= nil or seek)
 	if not group and not player then return nil end
+	local strong = player or any(t, { "lfm", "lf more", "looking for more" }) or n ~= nil or lfRole or lfClass or seek
+	-- "can summon" in a group post is fine; on its own it's a service ad
+	if any(t, SERVICE) and not strong then return nil end
 	if A.load then A.load() end
-	local p = { kind = group and "group" or "player", acts = findActs(t), need = roles(t), text = shown }
+	local p = { kind = group and "group" or "player", acts = findActs(t, shown), need = roles(t, shown), text = shown }
 	-- "need help" is noise; "need a tank for BRD" or "LF2M Hogger" is a group
-	if #p.acts == 0 and p.need == 0 and not any(t, STRONG) then return nil end
+	if #p.acts == 0 and p.need == 0 and not strong then return nil end
 	if group then
-		local have = tonumber(t:match("(%d)%s*/%s*5"))
-		local more = tonumber(t:match("lf(%d)m"))
-		p.size = (have and have >= 1 and have <= 4 and have) or (more and more >= 1 and more <= 4 and 5 - more) or 2
-		p.sizeGuess = not have and not more
+		local have, of = t:match("(%d+)%s*/%s*(%d+)")
+		have, of = tonumber(have), tonumber(of)
+		if not (have and (of == 5 or of == 10 or of == 20 or of == 40) and have >= 1 and have < of) then have = nil end
+		p.size = have or (n and 5 - n) or 2
+		p.sizeGuess = not have and not n
 	else
 		p.size = 1
 	end
+	-- levels: "48-52", "lvl 50+", "50+"
+	local lo, hi = t:match("%f[%d](%d%d)%s*%-%s*(%d%d)%f[^%d]")
+	if lo then p.min, p.max = tonumber(lo), tonumber(hi)
+	else
+		lo = t:match("%f[%d](%d%d)%+") or t:match("lvl%s*(%d%d)%f[^%d]") or t:match("level%s*(%d%d)%f[^%d]")
+		if lo then p.min, p.max = tonumber(lo), 60 end
+	end
+	if p.min and (p.min < 1 or p.min > 60 or (p.max or 60) < p.min) then p.min, p.max = nil, nil end
 	return p
 end
 
@@ -172,6 +240,23 @@ local function wanted(chan)
 	return false
 end
 
+-- "/og chatlog on": the last 300 lines from LookingForGroup and Trade, with what the parser made of
+-- them, kept in SavedVariables for tuning (no names). Off unless turned on.
+function N.logChat(chan, text, p)
+	local c = type(OpenGroupDB) == "table" and OpenGroupDB.chatlog
+	if type(c) ~= "table" or not c.on then return end
+	local low = chan:lower()
+	if not (low:find("lookingforgroup", 1, true) or low:find("lfg", 1, true) or low:find("trade", 1, true)) then return end
+	c.lines = type(c.lines) == "table" and c.lines or {}
+	local got = ""
+	if p then
+		local r = (p.need % 2 >= 1 and "t" or "") .. (p.need % 4 >= 2 and "h" or "") .. (p.need % 8 >= 4 and "d" or "")
+		got = ("%s %s %s %s"):format(p.kind == "group" and "g" or "p", p.acts[1] and (A.name(p.acts[1]) or "?") or "-", r ~= "" and r or "-", tostring(p.size))
+	end
+	c.lines[#c.lines + 1] = { at = time(), chan = (chan:gsub("^%d+%.%s*", "")), text = text:sub(1, 255), got = got }
+	while #c.lines > 300 do table.remove(c.lines, 1) end
+end
+
 function N.onChat(text, author, chanName, baseName, guid)
 	if not enabled() then return end
 	text, author = str(text), str(author)
@@ -179,6 +264,7 @@ function N.onChat(text, author, chanName, baseName, guid)
 	local chan = str(baseName) or str(chanName) or ""
 	if chan == "" or not wanted(chan) then return end
 	local p = N.parse(text)
+	N.logChat(chan, text, p)
 	if not p then return end
 	local class
 	if str(guid) and GetPlayerInfoByGUID then
@@ -188,7 +274,7 @@ function N.onChat(text, author, chanName, baseName, guid)
 	local matched = #p.acts > 0
 	put({
 		leader = author, src = "chat", chan = (chan:gsub("^%d+%.%s*", ""):gsub("%s*%d+$", "")),
-		class = class, size = p.size, sizeGuess = p.sizeGuess, need = p.need, acts = p.acts,
+		class = class, size = p.size, sizeGuess = p.sizeGuess, need = p.need, acts = p.acts, lmin = p.min, lmax = p.max,
 		title = matched and "" or p.text:sub(1, 70), note = matched and p.text:sub(1, 120) or "",
 		got = clock(),
 	})

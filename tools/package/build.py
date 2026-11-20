@@ -46,7 +46,7 @@ if not tv or tv.group(1) != version[1:]:
              % (TOC, tv.group(1) if tv else "(none)", version))
 
 if "--no-tests" not in sys.argv:
-    for c in (["tools/test.py", ADDON], ["tools/ui_smoke.py", ADDON]):
+    for c in (["tools/test.py", ADDON], ["tools/ui_smoke.py", ADDON], ["tools/chat_corpus.py", ADDON, "--min", "95"]):
         r = subprocess.run([sys.executable] + c, cwd=ROOT, capture_output=True, text=True)
         if r.returncode != 0:
             sys.exit("failed: %s\n%s%s" % (" ".join(c), r.stdout[-3000:], r.stderr[-3000:]))
