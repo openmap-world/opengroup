@@ -232,7 +232,7 @@ refreshBtn:SetScript("OnClick", function() browse.searchClick() end)
 refreshBtn:SetScript("OnEnter", function(self)
 	GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
 	GameTooltip:SetText(self:GetText())
-	GameTooltip:AddLine("Searches the game's Group Finder, one category per click, and asks the OpenGroup players you know what's listed. The game only lets addons search when you click.", 1, 1, 1, true)
+	GameTooltip:AddLine("Searches the game's Group Finder on your server, one category per click, and asks the OpenGroup players you know what's listed. The game only lets addons search when you click.", 1, 1, 1, true)
 	GameTooltip:Show()
 end)
 refreshBtn:SetScript("OnLeave", GameTooltip_Hide)
@@ -240,8 +240,8 @@ refreshBtn:SetScript("OnLeave", GameTooltip_Hide)
 -- one row, like the game's crafting window: a search box, a Filter button (with a red X while any
 -- filter is set), and Refresh. The Filter menu holds Category, Activity, Where, Group by, All
 -- levels and Compact.
-browse.WHERE = { { "all", "All" }, { "other", "Other chat numbers" }, { "mine", "Your chat number" }, { "finder", "Group Finder" }, { "chat", "LFG chat" }, { "og", "OpenGroup players" } }
-browse.GROUPS = { { "act", "Activity" }, { "shard", "Chat number" }, { "off", "Off" } }
+browse.WHERE = { { "all", "All" }, { "other", "Other servers" }, { "mine", "Your server" }, { "finder", "Group Finder" }, { "chat", "LFG chat" }, { "og", "OpenGroup players" } }
+browse.GROUPS = { { "act", "Activity" }, { "shard", "Server" }, { "off", "Off" } }
 browse.search = ""
 browse.HEADER_H = 38
 
@@ -620,11 +620,11 @@ local function buildRow(row)
 		end
 		GameTooltip:AddLine(" ")
 		GameTooltip:AddLine(("%s%s|r%s"):format(W.classColor(l.class), L.short(l.leader), l.level > 0 and ("  level " .. l.level) or ""))
-		GameTooltip:AddLine(("%s   |   %s"):format((l.shard or 0) > 0 and (L.CHAN .. " " .. l.shard) or (L.CHAN .. " unknown"), l.size <= 1 and "solo" or l.sizeGuess and "a group" or (l.size .. " in group")), .8, .8, .8)
+		GameTooltip:AddLine(("%s   |   %s"):format(OpenGroup_Nearby.whereTip(l.shard), l.size <= 1 and "solo" or l.sizeGuess and "a group" or (l.size .. " in group")), .8, .8, .8)
 		if l.src == "remote" then GameTooltip:AddLine(("Seen in the Group Finder on " .. L.CHAN .. " %d by %s, %s ago"):format(l.shard, l.reporter or "?", ago(time() - (l.got or time()))), .5, .5, .5, true)
 		elseif l.src == "remotechat" then GameTooltip:AddLine(("Posted in LookingForGroup on " .. L.CHAN .. " %d, passed on by %s, %s ago"):format(l.shard, l.reporter or "?", ago(time() - (l.got or time()))), .5, .5, .5, true)
-		elseif l.src == "finder" then GameTooltip:AddLine("Listed in the game's Group Finder", .5, .5, .5)
-		elseif l.src == "chat" then GameTooltip:AddLine(("Posted in %s chat (your chat number only)"):format(l.chan or "a"), .5, .5, .5)
+		elseif l.src == "finder" then GameTooltip:AddLine("Listed in the game's Group Finder (your server only)", .5, .5, .5)
+		elseif l.src == "chat" then GameTooltip:AddLine(("Posted in %s chat (your server only)"):format(l.chan or "a"), .5, .5, .5)
 		else GameTooltip:AddLine(l.hops == 0 and "Heard from them directly" or ("Passed on by %s"):format(L.short(l.via)), .5, .5, .5) end
 		if l.unconfirmed then GameTooltip:AddLine("Not confirmed by the leader yet. OpenGroup is checking with them.", 1, .6, .2, true) end
 		if r and r.dim then GameTooltip:AddLine(l.size >= 5 and "This group is full." or "They don't need a role you play.", 1, .5, .3) end
@@ -731,7 +731,7 @@ local function fillRow(row, d)
 	row.note:SetText(note)
 	row.note:SetShown(not compact and note ~= "")
 	row.shard:SetText((r.where == "finder" and (GREY .. "Group Finder|r") or r.where == "chat" and (GREY .. (l.chan or "LFG chat") .. "|r")
-		or (r.where == "mine" and GREY or GOLD) .. "OpenGroup, " .. ((l.shard or 0) > 0 and (L.CHAN .. " " .. l.shard) or (L.CHAN .. " ?")) .. "|r") .. (l.unconfirmed and (GREY .. " ?|r") or "")
+		or r.where == "mine" and (GREY .. "Your server|r") or (GOLD .. OpenGroup_Nearby.whereText(l.shard) .. "|r")) .. (l.unconfirmed and (GREY .. " ?|r") or "")
 		.. (r.gf and (GREY .. " GF|r") or ""))
 	if r.chatPost then row.shard:SetText(GOLD .. "LFG " .. l.shard .. "|r") end
 	-- Needs: one icon per open spot (the class where one is set), else the role bits; groups show
@@ -1018,13 +1018,13 @@ function browse.refresh()
 	local shown = #rows + #matches
 	if shown > 0 then empty:Hide()
 	elseif questFilter then
-		empty:SetText("Nobody is listed for this quest yet.\n\nList yourself and anyone on any chat number who picks it will find you.")
+		empty:SetText("Nobody is listed for this quest yet.\n\nList yourself and anyone on any server who picks it will find you.")
 		empty:Show()
 	elseif outside > 0 then empty:SetText(("Nothing at your level right now. %d %s outside it: tick All levels to see them."):format(outside, outside == 1 and "listing is" or "listings are")) empty:Show()
 	elseif total > 0 then empty:SetText("No groups match your filters.") empty:Show()
 	elseif peers == 0 then
 		empty:SetText("No OpenGroup players found yet.\n\nOpenGroup looks for them as you use it (friends, guild, group, " ..
-			"whispers, and a /who search now and then). Click " .. GOLD .. "Refresh|r to look again. Anything they list, on any chat number, shows up here.")
+			"whispers, and a /who search now and then). Click " .. GOLD .. "Refresh|r to look again. Anything they list, on any server, shows up here.")
 		empty:Show()
 	else
 		empty:SetText(("Nobody is listed right now.\n\n%d OpenGroup %s known. List your own group in the %sList a group|r tab."):format(peers, peers == 1 and "player" or "players", GOLD))
@@ -1490,7 +1490,7 @@ tellParty:SetScript("OnEnter", function(self)
 end)
 tellParty:SetScript("OnLeave", GameTooltip_Hide)
 
--- "Post in LookingForGroup": one line in your LookingForGroup channel when you list, so
+-- "Post in LookingForGroup": one line in your server's LookingForGroup channel when you list, so
 -- people without OpenGroup see it too (on by default; never repeated, never on updates)
 local lfgPost = CreateFrame("CheckButton", nil, list.footer, "UICheckButtonTemplate")
 lfgPost:SetSize(22, 22)
@@ -1502,7 +1502,7 @@ lfgPost:SetScript("OnClick", function(self) db().postLFG = self:GetChecked() and
 lfgPost:SetScript("OnEnter", function(self)
 	GameTooltip:SetOwner(self, "ANCHOR_TOP")
 	GameTooltip:SetText("Post in LFG chat")
-	GameTooltip:AddLine("When you list, OpenGroup also posts one line in your LookingForGroup channel, so players without the addon see it too. It's posted once, not repeated.", 1, 1, 1, true)
+	GameTooltip:AddLine("When you list, OpenGroup also posts one line in your server's LookingForGroup channel, so players without the addon see it too. It's posted once, not repeated.", 1, 1, 1, true)
 	GameTooltip:Show()
 end)
 lfgPost:SetScript("OnLeave", GameTooltip_Hide)
@@ -1541,7 +1541,7 @@ local function paintRoles()
 		step2.noteLabel:SetText(solo and "About you" or "Note")
 		step2.noteHint:SetText(solo and "e.g. casual noob, 500 dps pumper, first time in here" or "e.g. Lava run, have key, quick clear")
 	end
-	roleHint:SetText(solo and "Pick every role you'll play. Leaders on any chat number see you under Players."
+	roleHint:SetText(solo and "Pick every role you'll play. Leaders on any server see you under Players."
 		or "Click a spot to set its role, class and level. Right-click makes it any.")
 	for _, b in pairs(roleButtons) do b:SetShown(solo) end
 	paintSpots(not solo) paintAuto(not solo)
@@ -1610,7 +1610,7 @@ local function layoutBanners()
 		b:SetPoint("TOPLEFT", margin + col * (tw + gap), -top - row * (th + gap))
 		local n, kind = #c.acts, catKind(c)
 		local sub = n > 0 and (n .. " " .. (NOUN[kind] or (n == 1 and "activity" or "activities"))) or ""
-		if c.summon then sub = "Sell summons on every chat number" end
+		if c.summon then sub = "Sell summons on every server" end
 		if kind == "quest" then sub = (n > 0 and (n .. " zones, ") or "") .. "or any quest in your log" end
 		b:SetCategory(c.name, sub, c.summon and SUMMON_ICON or nil)
 		b:SetScript("OnClick", function() W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON") openCategory(c.id) end)
@@ -2044,7 +2044,7 @@ sHelp:SetPoint("TOPLEFT", goldBox, "BOTTOMLEFT", -6, -16)
 sHelp:SetWidth(440)
 sHelp:SetJustifyH("LEFT")
 sHelp:SetSpacing(3)
-sHelp:SetText(GREY .. "Players on every chat number see \"Summon to <place>\" with your price and can request one. They'll whisper you; invite them, and remember the Ritual of Summoning needs two helpers to click. Put \"have clickers\" in the note if you do.|r")
+sHelp:SetText(GREY .. "Players on every server see \"Summon to <place>\" with your price and can request one. They'll whisper you; invite them, and remember the Ritual of Summoning needs two helpers to click. Put \"have clickers\" in the note if you do.|r")
 
 refreshActs = function()
 	local c = draft.cat and A.category(draft.cat)
@@ -2232,7 +2232,7 @@ function list.refresh()
 		listBtn:SetEnabled(false)
 		listStatus:SetText(GREEN .. g.leader .. " is listing this group|r" .. GREY .. "  for " .. L.titleOf(g.l) .. "|r")
 	elseif L.mine then
-		listStatus:SetText(GREEN .. "Listed|r" .. GREY .. "  on every chat number you can reach|r")
+		listStatus:SetText(GREEN .. "Listed|r" .. GREY .. "  on every server you can reach|r")
 	elseif peers == 0 then
 		listStatus:SetText(GREY .. "No OpenGroup players known yet: see Network.|r")
 	else
@@ -2279,7 +2279,7 @@ local netSub = net.header:CreateFontString(nil, "ARTWORK", "GameFontHighlightSma
 netSub:SetPoint("TOPLEFT", netTitle, "BOTTOMLEFT", 0, -6)
 netSub:SetWidth(400)
 netSub:SetJustifyH("LEFT")
-netSub:SetText("Listings travel between OpenGroup players in hidden whispers, so they reach every chat number. Nothing shows in anyone's chat.")
+netSub:SetText("Listings travel between OpenGroup players in hidden whispers, so they reach every server. Nothing shows in anyone's chat.")
 
 -- top card: your server and how big the network is
 local card = CreateFrame("Frame", nil, net.content)
@@ -2319,7 +2319,7 @@ findHelp:SetPoint("RIGHT", net.content, "RIGHT", -16, 0)
 findHelp:SetJustifyH("LEFT")
 findHelp:SetSpacing(3)
 findHelp:SetText("OpenGroup grows by itself: it quietly says hello to your friends, guild, group and anyone you whisper, " ..
-	"and every OpenGroup player you meet shares who they know. Clicking around OpenGroup also runs a /who search now and then (it sees everyone).")
+	"and every OpenGroup player you meet shares who they know. Clicking around OpenGroup also runs a /who search now and then (it sees every server).")
 local scanBtn = CreateFrame("Button", nil, net.content, "UIPanelButtonTemplate")
 scanBtn:SetSize(200, 26)
 scanBtn:SetPoint("TOPLEFT", findHelp, "BOTTOMLEFT", -2, -10)
@@ -2335,14 +2335,14 @@ do
 	cb:SetPoint("TOPLEFT", scanBtn, "BOTTOMLEFT", 0, -8)
 	local lbl = net.content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 	lbl:SetPoint("LEFT", cb, "RIGHT", 4, 1)
-	lbl:SetText("Share LFG chat from my " .. L.CHAN:lower() .. " number")
+	lbl:SetText("Share LFG chat from my server")
 	net.shareCheck = cb
-	cb:SetScript("OnShow", function(self) self:SetChecked(OpenGroup_Nearby.shareChat()) end)
+	cb:SetScript("OnShow", function(self) self:SetChecked(db().shareChat ~= false) end)
 	cb:SetScript("OnClick", function(self) db().shareChat = self:GetChecked() and true or false end)
 	cb:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-		GameTooltip:SetText("Share LFG chat from my " .. L.CHAN:lower() .. " number")
-		GameTooltip:AddLine("LookingForGroup chat is per chat number. When you're the OpenGroup player passing on yours, recent posts go to OpenGroup players on other numbers (the poster's name, the post and its age). Same realm and faction only.", 1, 1, 1, true)
+		GameTooltip:SetText("Share LFG chat from my server")
+		GameTooltip:AddLine("When you're the OpenGroup player passing on your server's groups, recent LookingForGroup posts go to OpenGroup players on other servers too (the poster's name, the post and its age). Same realm and faction only.", 1, 1, 1, true)
 		GameTooltip:Show()
 	end)
 	cb:SetScript("OnLeave", GameTooltip_Hide)
@@ -2368,10 +2368,18 @@ do
 	hover:SetScript("OnEnter", function(self)
 		local Nb = OpenGroup_Nearby
 		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-		GameTooltip:SetText(L.CHAN .. " numbers")
-		GameTooltip:AddLine("The number the game puts after Trade, LookingForGroup and General (Trade - City 47). OpenGroup shows it as " .. L.CHAN .. " 47.", 1, 1, 1, true)
+		GameTooltip:SetText(L.CHAN .. " numbers and servers")
+		GameTooltip:AddLine("The number the game puts after Trade, LookingForGroup and General (Trade - City 47) isn't a server. Several numbers can share one hidden server, and with it one Group Finder, LookingForGroup channel and Trade chat. OpenGroup shows it as " .. L.CHAN .. " 47.", 1, 1, 1, true)
 		GameTooltip:AddLine(" ")
-		GameTooltip:AddLine("The game's Group Finder is shared: players on every number see the same groups. LookingForGroup and Trade chat are per number, so you only see the posts on yours. That's what OpenGroup bridges: OpenGroup listings and LFG chat posts reach players on every number.", .9, .9, .9, true)
+		GameTooltip:AddLine("Your server: " .. (Nb and Nb.serverName() or "?"), .25, 1, .25, true)
+		local ov = Nb and Nb.overlapText and Nb.overlapText()
+		if ov then
+			GameTooltip:AddLine("How much of each number's Group Finder you already see in yours:", 1, 1, 1, true)
+			for part in ov:gmatch("[^,]+") do GameTooltip:AddLine("  " .. part:gsub("^%s+", ""), .9, .9, .9) end
+			GameTooltip:AddLine("Close to 100% means the same server as you; close to 0% another server.", .6, .6, .6, true)
+		else
+			GameTooltip:AddLine("Nothing passed on from another number yet, so OpenGroup can't tell which share your server.", .8, .8, .8, true)
+		end
 		GameTooltip:Show()
 	end)
 	hover:SetScript("OnLeave", GameTooltip_Hide)
@@ -2413,7 +2421,9 @@ versionText:SetPoint("LEFT", 6, 0)
 
 function net.refresh()
 	local myShard = L.shard()
-	shardBig:SetText("You're on " .. GOLD .. L.CHAN .. " " .. (myShard > 0 and myShard or "?") .. "|r")
+	local big, small = OpenGroup_Nearby.serverHeadline()
+	shardBig:SetText(GOLD .. big .. "|r")
+	net.headNote = small
 	local peers, shards, online = L.count(L.peers), {}, 0
 	local live = L.live()
 	for name, p in pairs(L.peers) do
@@ -2422,7 +2432,7 @@ function net.refresh()
 	end
 	local ns = L.count(shards)
 	peersText:SetText(("%d %s known on %d %s   %s%d heard from lately|r"):format(peers, peers == 1 and "player" or "players",
-		ns, ns == 1 and (L.CHAN .. " number") or (L.CHAN .. " numbers"), GREEN, online))
+		ns, ns == 1 and (L.CHAN .. " number") or (L.CHAN .. " numbers"), GREEN, online) .. (net.headNote and ("   " .. GREY .. net.headNote .. "|r") or ""))
 	local s = L.scan
 	scanText:SetText(s.status or "")
 	scanBtn:SetEnabled(not s.inFlight)
@@ -2433,7 +2443,7 @@ function net.refresh()
 	local parts = {}
 	for i, k in ipairs(keys) do
 		if i > 10 then parts[#parts + 1] = GREY .. "+" .. (#keys - 10) .. " more|r" break end
-		parts[#parts + 1] = ("%s" .. L.CHAN .. " %d|r %s%d|r"):format(k == myShard and GREEN or GOLD, k, GREY, shards[k])
+		parts[#parts + 1] = ("%s" .. L.CHAN .. " %d|r %s%d|r"):format(OpenGroup_Nearby.sameServer(k) and GREEN or GOLD, k, GREY, shards[k])
 	end
 	shardChips:SetText(#parts > 0 and table.concat(parts, "    ") or (GREY .. "Nobody yet. Players appear here as OpenGroup finds them.|r"))
 	local recent = L.recent(#peerRows)
@@ -2446,7 +2456,7 @@ function net.refresh()
 			r.name:SetText(L.short(name) .. (p.level and p.level > 0 and (GREY .. "  " .. p.level .. "|r") or ""))
 			-- shard 0 means we haven't heard it yet (they passed on a listing, but no hello so far)
 			local shardText = (p.shard or 0) > 0 and (L.CHAN .. " " .. p.shard) or (L.CHAN .. " unknown")
-			r.info:SetText(("%s%s|r   %s"):format(((p.shard or 0) > 0 and p.shard == myShard) and GREEN or (p.shard or 0) > 0 and GOLD or GREY, shardText,
+			r.info:SetText(("%s%s|r   %s"):format(((p.shard or 0) > 0 and OpenGroup_Nearby.sameServer(p.shard)) and GREEN or (p.shard or 0) > 0 and GOLD or GREY, shardText,
 				live[name] and (ago(time() - (p.seen or 0)) .. " ago") or "offline"))
 			-- a short window: rows that would run into the stats line stay hidden
 			local bottom, floor = r:GetBottom(), stats:GetTop()
@@ -2505,7 +2515,7 @@ do
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 		GameTooltip:SetText("Listed")
 		if L.mine then GameTooltip:AddLine(L.titleOf(L.mine), 1, 1, 1) end
-		GameTooltip:AddLine("OpenGroup players on every chat number can see you.", .8, .8, .8, true)
+		GameTooltip:AddLine("OpenGroup players on every server can see you.", .8, .8, .8, true)
 		GameTooltip:Show()
 	end)
 	holder:SetScript("OnLeave", GameTooltip_Hide)
@@ -2713,7 +2723,7 @@ qbar:SetScript("OnClick", function() showPage((browse.matchCount or 0) > 0 and "
 qbar:SetScript("OnEnter", function(self)
 	GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
 	GameTooltip:SetText("You're listed")
-	GameTooltip:AddLine("OpenGroup players on every chat number can see you. Your listing is re-sent every 90 seconds while you're online.", 1, 1, 1, true)
+	GameTooltip:AddLine("OpenGroup players on every server can see you. Your listing is re-sent every 90 seconds while you're online.", 1, 1, 1, true)
 	GameTooltip:AddLine((browse.matchCount or 0) > 0 and "Click to see who fits (top of Browse)." or "Click to change it.", 0, 1, 0)
 	GameTooltip:Show()
 end)
@@ -2804,7 +2814,7 @@ local function announceToGroup()
 	local m = L.mine
 	local what = m.cat == P.SUMMON_CAT and ("summons to " .. (m.title or "?")) or chatTitle(m)
 	local need = m.cat ~= P.SUMMON_CAT and chatRoles(m.need) or nil
-	local text = ("[OpenGroup] Listed for %s%s. Anyone with OpenGroup on any chat number can find us."):format(
+	local text = ("[OpenGroup] Listed for %s%s. Anyone with OpenGroup on any server can find us."):format(
 		what, need and (", need " .. need) or "")
 	local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
 	local ok = send and pcall(send, text, (IsInRaid and IsInRaid()) and "RAID" or "PARTY")
@@ -2898,7 +2908,7 @@ L.onDelisted = function()
 	if OpenGroup_Minimap then OpenGroup_Minimap.update() end
 	W.sound("IG_CHARACTER_INFO_CLOSE")
 	OpenGroup_Alert.show({
-		head = "OpenGroup", small = "Delisted on every chat number", name = lastTitle or "You're off the list",
+		head = "OpenGroup", small = "Delisted on every server", name = lastTitle or "You're off the list",
 		icon = L.ICON, grey = true,
 		quiet = true, sound = "IG_CHARACTER_INFO_CLOSE", tint = { 0.42, 0.12, 0.1 }, hold = 2.5,
 	})
@@ -3184,7 +3194,7 @@ browse.openTell = openWhisper
 -- --------------------------------------------------------------------------------------------
 -- FIND PLAYERS: a /who search built from an open spot (classes, levels, zone), the results in a
 -- list, and one-click whispers: each press opens the chat box with /w and your message, and you
--- press Enter (one whisper per press, as the game allows). /who reaches every chat number, so this is
+-- press Enter (one whisper per press, as the game allows). /who reaches every server, so this is
 -- the way to people the Group Finder and Trade never show you.
 
 local finder = page("find")
@@ -3292,7 +3302,7 @@ local finder = page("find")
 	F.empty:SetPoint("CENTER", 0, 20)
 	F.empty:SetWidth(360)
 	F.empty:SetSpacing(4)
-	F.empty:SetText("Pick a class and levels, then click Search. /who looks across everyone, so this finds people the Group Finder and chat channels don't show you.")
+	F.empty:SetText("Pick a class and levels, then click Search. /who looks across every server, so this finds people the Group Finder and chat channels don't show you.")
 
 	-- footer: the message and Whisper next
 	F.msg = CreateFrame("EditBox", nil, F.footer, "InputBoxTemplate")
@@ -3459,7 +3469,7 @@ end)()
 local sideTabs = {}
 sideTabs[1] = sideTab("browse", "Interface\\Icons\\INV_Misc_GroupLooking", "Browse groups")
 sideTabs[2] = sideTab("list", "Interface\\Icons\\INV_Misc_GroupNeedMore", "List a group", sideTabs[1])
-sideTabs[3] = sideTab("network", "Interface\\Icons\\INV_Misc_Gem_Amethyst_02", "Chat numbers and players", sideTabs[2])
+sideTabs[3] = sideTab("network", "Interface\\Icons\\INV_Misc_Gem_Amethyst_02", "Servers and players", sideTabs[2])
 sideTabs[4] = sideTab("whispers", "Interface\\Icons\\INV_Letter_15", "Whispers", sideTabs[3])
 sideTabs[5] = sideTab("find", "Interface\\Icons\\INV_Misc_Spyglass_03", "Find players (/who)", sideTabs[4])
 do
@@ -3555,7 +3565,7 @@ SlashCmdList.OPENGROUP = function(msg)
 	elseif cmd == "status" then
 		local s = L.stats
 		L.print(("%s, %d players known, %d groups, sent %d, refused %d (%s), received %d, bad %d%s"):format(
-			L.CHAN .. " " .. L.shard(), L.count(L.peers), L.count(L.listings), s.sent, s.refused, tostring(L.lastRefusal or "-"),
+			OpenGroup_Nearby and OpenGroup_Nearby.serverName() or (L.CHAN .. " " .. L.shard()), L.count(L.peers), L.count(L.listings), s.sent, s.refused, tostring(L.lastRefusal or "-"),
 			s.got, s.bad, L.lastError and (", last error: " .. tostring(L.lastError)) or ""))
 		local found = {}
 		for _, n in ipairs({ "LFGParentFrame", "PVEFrame", "GroupFinderFrame", "LFGListingFrame" }) do if _G[n] then found[#found + 1] = n end end
@@ -3563,20 +3573,22 @@ SlashCmdList.OPENGROUP = function(msg)
 			" (frames seen: " .. (#found > 0 and table.concat(found, ", ") or "none") .. ")")
 		local Nb = OpenGroup_Nearby
 		if Nb then
-			L.print(("here: %d from the Group Finder, %d from chat (%d chat posts read, %d searches, %d posted to LookingForGroup, channel %s)"):format(
+			L.print(("your server: %d from the Group Finder, %d from chat (%d chat posts read, %d searches, %d posted to LookingForGroup, channel %s)"):format(
 				Nb.count("finder"), Nb.count("chat"), Nb.stats.chat, Nb.stats.searches, Nb.stats.posted, tostring(Nb.lfgChannel() or "not joined")))
 			if Nb.blocked then L.print(("blocked by the game this session: %s (%d times)"):format(Nb.blocked, Nb.blockedCount or 1) .. (Nb.noSearch and " (Group Finder searches paused)" or "")) end
 			local by = {}
-			for shard, n in pairs(Nb.stats.remoteBy or {}) do by[#by + 1] = (L.CHAN .. " %d: %d"):format(shard, n) end
+			for shard, n in pairs(Nb.stats.remoteBy or {}) do by[#by + 1] = ("shard %d: %d"):format(shard, n) end
 			table.sort(by)
 			local tot, seen = Nb.stats.overlapTotal or 0, Nb.stats.overlapSeen or 0
-			if Nb.SHARE_FINDER then L.print(("other numbers' Group Finder: %d groups from here to share, %d sent so far; received %s%s"):format(
+			local ov = Nb.overlapText and Nb.overlapText()
+			if ov then L.print("Group Finder matches yours: " .. ov) end
+			L.print(("other servers' Group Finder: %d groups from here to share, %d sent so far; received %s%s"):format(
 				Nb.stats.harvested or 0, Nb.stats.reported or 0, #by > 0 and table.concat(by, ", ") or "none yet",
-				tot > 0 and ("; %d%% of received were already in your own results (%d of %d)"):format(math.floor(100 * seen / tot + 0.5), seen, tot) or "")) end
+				tot > 0 and ("; %d%% of received were already in your own results (%d of %d)"):format(math.floor(100 * seen / tot + 0.5), seen, tot) or ""))
 			local cb2 = {}
-			for shard, n in pairs(Nb.stats.chatBy or {}) do cb2[#cb2 + 1] = (L.CHAN .. " %d: %d"):format(shard, n) end
+			for shard, n in pairs(Nb.stats.chatBy or {}) do cb2[#cb2 + 1] = ("shard %d: %d"):format(shard, n) end
 			table.sort(cb2)
-			L.print(("other numbers' LFG chat: sharing %s, %d posts sent so far; received %s"):format(
+			L.print(("other servers' LFG chat: sharing %s, %d posts sent so far; received %s"):format(
 				Nb.shareChat() and "on" or "off", Nb.stats.chatShared or 0, #cb2 > 0 and table.concat(cb2, ", ") or "none yet"))
 			if Nb.blockedFrom then
 				L.print(("the search was %.2fs before the block, called from:"):format(Nb.blockedAfter or -1))

@@ -904,7 +904,7 @@ function L.groupRows(rows, by)
 		if by == "act" then key, text = r.groupKey, r.groupName
 		else
 			key = r.where == "other" and ("s" .. r.shard) or r.where
-			text = r.where == "other" and (L.CHAN .. " " .. r.shard) or r.where == "mine" and "Your chat number" or r.where == "finder" and "Group Finder" or "LFG chat"
+			text = r.where == "other" and (L.CHAN .. " " .. r.shard) or r.where == "mine" and "Your server" or r.where == "finder" and "Group Finder" or "LFG chat"
 		end
 		local g = index[key]
 		if not g then

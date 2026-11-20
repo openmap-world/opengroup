@@ -126,8 +126,8 @@ function fake:CreateCheckbox(text, isSel, onSel) items[text] = onSel end
 function fake:CreateTitle() end
 function fake:CreateDivider() end
 B.buildFilter(fake)
-assert(items["Other chat numbers"] and items["All levels"] and items["Compact rows"] and items["Chat number"], "filter menu items")
-items["Other chat numbers"]() assert(OpenGroupDB.where == "other" and B.filtersActive(), "Where from the menu")
+assert(items["Other servers"] and items["All levels"] and items["Compact rows"] and items["Server"], "filter menu items")
+items["Other servers"]() assert(OpenGroupDB.where == "other" and B.filtersActive(), "Where from the menu")
 items["All levels"]() assert(OpenGroupDB.allLevels == false, "All levels toggles")
 B.resetFilters() assert(OpenGroupDB.where == "all" and not B.filtersActive(), "reset clears filters")
 OpenGroupDB.allLevels = true
@@ -336,10 +336,6 @@ local N = OpenGroup_Nearby
 local Pr = OpenGroup_Proto
 OpenGroup.listings, OpenGroup.nearby, OpenGroup.remote = {}, {}, {}
 OpenGroup.peers["Rep R"] = { shard = 56, level = 60, seen = CLOCK }
--- the Group Finder path is off (the game's list is shared); with the flag on it still works
-for _, m in ipairs(Pr.finderDigest(56, 1, { { leader = "Ignored I", act = 30, size = 3, need = 4, age = 20 } })) do OpenGroup.receive(m, "Rep R") end
-assert(OpenGroup.remote["Ignored I"] == nil, "Group Finder digests are ignored while sharing is off")
-N.SHARE_FINDER = true
 local dg = Pr.finderDigest(56, 1, { { leader = "Far Away", act = 30, size = 3, need = 4, age = 20 }, { leader = "Other Group", act = 31, size = 2, need = 6, age = 5 } })
 local dropped0 = OpenGroup.stats.dropped or 0
 for _, m in ipairs(dg) do OpenGroup.receive(m, "Rep R") end
@@ -414,7 +410,6 @@ OpenGroupDB.shareChat = false
 assert(N.report() == false and N.stats.chatShared == s0 + 1, "the setting turns it off")
 OpenGroupDB.shareChat = nil
 print("other shards' LFG chat ok")
-N.SHARE_FINDER = false
 print("other shards' Group Finder ok")
 -- pinging yourself sends nothing
 OpenGroup.pings = {}
@@ -496,25 +491,52 @@ local frow = CreateFrame("Button") frow.built = false
 INITS[#INITS](frow, F.results[4])
 print("find row badge:", frow.badge:GetText())
 ChatFrame_SendTell = nil ChatEdit_GetActiveWindow = nil
--- one LFG chat reporter per chat number: Trade 56 is another number, so it gets the digest
+-- servers: a Trade number whose Group Finder we nearly all had is our server
 local Nb = OpenGroup_Nearby
+Nb.stats.overlapBy = { [56] = { seen = 19, total = 20 }, [61] = { seen = 0, total = 12 }, [70] = { seen = 1, total = 2 } }
+print("server:", Nb.serverName(), "|", Nb.whereText(56), "|", Nb.whereText(61), "|", Nb.whereText(70), "|", Nb.whereTip(56))
+assert(Nb.serverName() == "Chat 47 + 56", "our server as its Trade numbers")
+assert(Nb.whereText(56) == "Your server" and Nb.whereText(61) == "Other server" and Nb.whereText(70) == "Chat 70", "row labels")
+assert(Nb.whereTip(70):find("server unknown"), "unknown says so")
+-- one reporter per server: a player on Trade 56 (our server) stands by and gets no digest
 OpenGroup.nearby = {}
-OpenGroup.nearby["Near Two"] = { leader = "Near Two", src = "chat", size = 1, need = 1, acts = {}, got = CLOCK, level = 0, shard = 47, title = "LFM strat", note = "" }
-OpenGroup.nearby["GF Two"] = { leader = "GF Two", src = "finder", size = 3, need = 6, acts = {30}, got = CLOCK, level = 0, shard = 47 }
+OpenGroup.nearby["Near Two"] = { leader = "Near Two", src = "finder", size = 3, need = 6, acts = {30}, got = CLOCK, level = 0, shard = 47 }
 for n in pairs(OpenGroup.peers) do OpenGroup.peers[n] = nil end
-OpenGroup.peers["Mate M"] = { shard = 47, level = 60, seen = CLOCK }
+OpenGroup.peers["Same S"] = { shard = 56, level = 60, seen = CLOCK }
 Nb.resultsAt = GetTime() Nb.claims = {}
-local h0, c0 = Nb.stats.harvested, Nb.stats.chatShared
-assert(Nb.report() == false, "nobody on another number: nothing to report")
-OpenGroup.peers["Other O"] = { shard = 56, level = 60, seen = CLOCK }
-assert(Nb.report() == true and Nb.stats.chatShared == c0 + 1, "chat goes to another number")
-assert(Nb.stats.harvested == h0, "no Group Finder digest")
-OpenGroup.receive(Pr2.reporting(3), "Other O")
-assert(Nb.claims["Other O"] == nil, "a reporter on another number doesn't make us stand by")
-OpenGroup.receive(Pr2.reporting(3), "Mate M")
-assert(Nb.claims["Mate M"], "one on our number does")
+local q2 = OpenGroup.queued()
+assert(Nb.report() == false, "only our own server's players: nobody to report to")
+OpenGroup.peers["Far F"] = { shard = 61, level = 60, seen = CLOCK }
+assert(Nb.report() == true, "another server gets the digest")
+OpenGroup.receive(Pr2.reporting(3), "Same S")
+assert(Nb.claims["Same S"], "a claim from our server's other Trade number counts")
+-- LFG chat is per chat number: Trade 56 shares our server (no Group Finder digest) but still gets
+-- our chat, and its own chat reporter doesn't make us stand by
+Nb.stats.overlapBy = { [56] = { seen = 19, total = 20 } }
+for n in pairs(OpenGroup.peers) do OpenGroup.peers[n] = nil end
+OpenGroup.peers["Same S"] = { shard = 56, level = 60, seen = CLOCK }
+OpenGroup.peers["Mate M"] = { shard = 47, level = 60, seen = CLOCK }
+OpenGroup.nearby = {}
+OpenGroup.nearby["GF Three"] = { leader = "GF Three", src = "finder", size = 3, need = 6, acts = {30}, got = CLOCK, level = 0, shard = 47 }
+OpenGroup.nearby["Chat Three"] = { leader = "Chat Three", src = "chat", size = 1, need = 1, acts = {}, got = CLOCK, level = 0, shard = 47, title = "LFM strat", note = "" }
+Nb.resultsAt = GetTime() Nb.claims = {} Nb.chatClaims = {}
+local sentTo, saveSend = {}, OpenGroup.send
+OpenGroup.send = function(to, m, ...) sentTo[#sentTo + 1] = to .. " " .. m:sub(1, 2) .. (m:sub(1, 2) == "R1" and (" " .. m) or "") return saveSend(to, m, ...) end
 OpenGroupDB.shareChat = nil
-assert(Nb.shareChat() == Nb.SHARE_CHAT_DEFAULT, "chat sharing default is one flag")
+assert(Nb.report() == true, "chat goes out to the other number on our server")
+local got = table.concat(sentTo, " | ")
+print("sent:", got)
+assert(got:find("Same S C1") and not got:find("Same S F1"), "same server: chat, no Group Finder digest")
+assert(got:find("Mate M R1 R1;%d+;fc"), "our number's player hears we report both")
+OpenGroup.send = saveSend
+OpenGroup.receive(Pr2.reporting(2, "c"), "Same S")
+assert(Nb.chatClaims["Same S"] == nil, "another number's chat reporter doesn't count for ours")
+OpenGroup.receive(Pr2.reporting(2, "f"), "Same S")
+assert(Nb.claims["Same S"], "but its Group Finder claim does (same server)")
+OpenGroup.receive("R1;3", "Mate M")
+assert(Nb.claims["Mate M"] and Nb.chatClaims["Mate M"], "an older claim (no kind) counts for both")
+assert(select(2, Pr2.parse(Pr2.reporting(1, "c"))).what == "c" and select(2, Pr2.parse("R1;1")).what == "fc", "claim kinds parse")
+Nb.stats.overlapBy = {} Nb.claims = {} Nb.chatClaims = {}
 print("find players ok")
 -- queued for several: search finds the second one, a filter files it there, no filter lists it under all
 local Ac = OpenGroup_Activities
@@ -548,9 +570,7 @@ assert(kd == "F1" and dd.items[1].act == 50 and dd.items[1].more[1] == 51 and dd
 local kd2, dd2 = Pd.parse("F1;56;3;1;1;Old O/50/1/4/2")
 assert(kd2 == "F1" and #dd2.items[1].more == 0, "older digests still parse")
 OpenGroup.nearby = {}
-OpenGroup_Nearby.SHARE_FINDER = true
 OpenGroup.receive(dm[1], "Rep R")
-OpenGroup_Nearby.SHARE_FINDER = false
 local rm = OpenGroup.remote["Multi M"]
 assert(rm and #rm.acts == 3 and rm.acts[2] == 51, "other-server rows keep every activity")
 print("multi-activity ok")

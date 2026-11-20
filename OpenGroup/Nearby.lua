@@ -451,14 +451,71 @@ function N.overlapText()
 	end
 	return table.concat(out, ", ")
 end
--- The game's Group Finder turned out to be shared by every chat number (players on 47, 55, 56 and
--- 86 all see the same groups), so passing it on adds nothing: off. Only the chat channels
--- (LookingForGroup, Trade, General) differ per number, and those are what OpenGroup bridges.
--- The Group Finder path stays behind this flag in case a number ever turns out different; while
--- it's off, digests from older versions are ignored (their groups are in everyone's own list).
-N.SHARE_FINDER = false
--- "Share LFG chat from my chat number": the default when the player hasn't set it
-N.SHARE_CHAT_DEFAULT = true
+-- Trade channel numbers aren't servers: several Trade numbers can share one hidden server (and
+-- with it one Group Finder, LookingForGroup channel and Trade chat). Another Trade number whose
+-- passed-on Group Finder groups we nearly all had already is our server; one we had almost none
+-- of is another server; anything else (or too few groups to tell) is unknown.
+local SAME_AT, DIFF_AT, MIN_GROUPS = 0.9, 0.3, 5
+function N.matchOf(trade)
+	local o = N.stats.overlapBy[trade]
+	if o and o.total >= MIN_GROUPS then return o.seen / o.total, o.total end
+	return nil
+end
+-- true: our server, false: another server, nil: can't tell yet
+function N.sameServer(trade, mine)
+	mine = mine or (L.shard and L.shard()) or 0
+	if not trade or trade <= 0 or mine <= 0 then return nil end
+	if trade == mine then return true end
+	local m = N.matchOf(trade)
+	if not m then return nil end
+	if m >= SAME_AT then return true elseif m <= DIFF_AT then return false end
+	return nil
+end
+-- the Trade numbers on our server, lowest first
+function N.myTrades()
+	local mine = (L.shard and L.shard()) or 0
+	if mine <= 0 then return {} end
+	local list = { mine }
+	for k in pairs(N.stats.overlapBy) do if k ~= mine and N.sameServer(k, mine) then list[#list + 1] = k end end
+	table.sort(list)
+	return list
+end
+-- our server as its channel numbers: "Chat 47 + 56" once another number matched; before that
+-- "Chat 47, no other numbers compared yet" (or "no other number matched yet"). No made-up names:
+-- the numbers are what players can check.
+function N.serverName()
+	local t = N.myTrades()
+	if #t == 0 then return L.CHAN .. " ?, not known yet" end
+	if #t == 1 then
+		return ("%s %d, %s"):format(L.CHAN, t[1], next(N.stats.overlapBy) and "no other number matched yet" or "no other numbers compared yet")
+	end
+	return L.CHAN .. " " .. table.concat(t, " + ")
+end
+-- the Network tab's headline: { big line, small line or nil }
+function N.serverHeadline()
+	local t = N.myTrades()
+	if #t > 1 then return "Your server: " .. L.CHAN .. " " .. table.concat(t, " + "), nil end
+	if #t == 0 then return "You're on " .. L.CHAN .. " ?", "The channel number shows once you're in Trade or LookingForGroup." end
+	return ("You're on %s %d"):format(L.CHAN, t[1]), next(N.stats.overlapBy) and "No other number matched yet." or "No other numbers compared yet."
+end
+-- for a row: "Your server", "Other server" or "Trade 61"
+function N.whereText(trade)
+	local same = N.sameServer(trade)
+	if same == true then return "Your server" elseif same == false then return "Other server" end
+	return (trade or 0) > 0 and (L.CHAN .. " " .. trade) or (L.CHAN .. " ?")
+end
+-- for a tooltip: the Trade number and how we know
+function N.whereTip(trade)
+	if not trade or trade <= 0 then return (L.CHAN .. " unknown") end
+	local mine = (L.shard and L.shard()) or 0
+	if trade == mine then return ("" .. L.CHAN .. " %d, your server"):format(trade) end
+	local m, n = N.matchOf(trade)
+	local same = N.sameServer(trade)
+	local how = m and (" (Group Finder %d%% the same as yours, %d groups)"):format(math.floor(m * 100 + 0.5), n) or ""
+	if same == true then return ("" .. L.CHAN .. " %d, your server%s"):format(trade, how)
+	elseif same == false then return ("" .. L.CHAN .. " %d, another server%s"):format(trade, how) end
+	return ("" .. L.CHAN .. " %d, server unknown%s"):format(trade, how)
+end
 local REPORT_EVERY, CLAIM_KEEP, REMOTE_KEEP, MAX_TARGETS = 90, 150, 300, 8
 local CHAT_SHARE_KEEP = 600   -- a passed-on chat post, this long
 N.stats.chatShared, N.stats.chatBy = 0, {}
@@ -466,11 +523,7 @@ local digestSeq = 0
 local chatPartial = {}
 
 -- "Share LFG chat from my shard": on unless turned off
-function N.shareChat()
-	local v = type(OpenGroupDB) == "table" and OpenGroupDB.shareChat
-	if v == nil then return N.SHARE_CHAT_DEFAULT end
-	return v == true
-end
+function N.shareChat() return not (type(OpenGroupDB) == "table" and OpenGroupDB.shareChat == false) end
 
 -- our shard's recent LookingForGroup posts worth passing on: newest first, not OpenGroup users
 function N.chatItems()
@@ -514,43 +567,67 @@ function N.shouldReport(me, claims, now, haveFresh)
 	return true
 end
 
-local turn = 0
+local turn, chatTurn = 0, 0
+N.chatClaims = {}         -- [name] = time: an OpenGroup player on our chat number said they pass on its LFG chat
 function N.report()
 	if not enabled() or not L.shard or L.shard() <= 0 then return false end
 	local fresh = N.resultsAt and GetTime() - N.resultsAt < FINDER_KEEP
-	local items = (N.SHARE_FINDER and fresh) and N.digestItems() or {}
+	local items = fresh and N.digestItems() or {}
 	local posts = N.shareChat() and N.chatItems() or {}
-	if not N.shouldReport(L.me() or "", N.claims, clock(), #items > 0 or #posts > 0) then return false end
-	if #items == 0 and #posts == 0 then return false end
-	local mine, far, near = L.shard(), {}, {}
+	local me, now = L.me() or "", clock()
+	-- two elections: the Group Finder is per server (several chat numbers can share one), so one
+	-- reporter per server; LookingForGroup chat is per chat number, so one reporter per number,
+	-- whatever server the numbers turn out to share
+	local gf = #items > 0 and N.shouldReport(me, N.claims, now, true)
+	local chat = #posts > 0 and N.shouldReport(me, N.chatClaims, now, true)
+	if not gf and not chat then return false end
+	local mine = L.shard()
+	local gfTo, chatTo, near = {}, {}, {}
 	for name, p in pairs(L.live()) do
-		-- one reporter per chat number: players on other numbers get the digest, players on ours
-		-- hear that we report and stand by
-		if (p.shard or 0) > 0 and p.shard ~= mine then far[#far + 1] = name
-		elseif p.shard == mine then near[#near + 1] = name end
+		local n = p.shard or 0
+		local same = N.sameServer(n, mine)
+		if n > 0 and same ~= true then gfTo[#gfTo + 1] = name end
+		if n > 0 and n ~= mine then chatTo[#chatTo + 1] = name end
+		local what = ((gf and same == true) and "f" or "") .. ((chat and n == mine) and "c" or "")
+		if what ~= "" then near[#near + 1] = { name = name, what = what } end
 	end
-	if #far == 0 then return false end
-	table.sort(far)
+	if not gf then gfTo = {} end
+	if not chat then chatTo = {} end
+	if #gfTo == 0 and #chatTo == 0 then return false end
 	digestSeq = digestSeq + 1
-	local msgs = {}
-	if #items > 0 then for _, m in ipairs(P.finderDigest(mine, digestSeq, items)) do msgs[#msgs + 1] = m end end
-	if #posts > 0 then for _, m in ipairs(P.chatDigest(mine, digestSeq, posts)) do msgs[#msgs + 1] = m end end
-	-- a few other-shard players each round, taking turns
-	for i = 1, math.min(MAX_TARGETS, #far) do
-		turn = turn % #far + 1
-		for _, m in ipairs(msgs) do L.send(far[turn], m, true) end
+	local sent = false
+	if #gfTo > 0 then
+		table.sort(gfTo)
+		local msgs = P.finderDigest(mine, digestSeq, items)
+		for i = 1, math.min(MAX_TARGETS, #gfTo) do
+			turn = turn % #gfTo + 1
+			for _, m in ipairs(msgs) do L.send(gfTo[turn], m, true) end
+		end
+		N.stats.reported = N.stats.reported + #items
+		sent = true
 	end
-	-- tell the others on our shard that we report, so they stand by
-	table.sort(near)
-	for i = 1, math.min(10, #near) do L.send(near[i], P.reporting(#items + #posts), true) end
-	N.stats.reported = N.stats.reported + #items
-	N.stats.chatShared = N.stats.chatShared + #posts
-	return true
+	if #chatTo > 0 then
+		table.sort(chatTo)
+		local msgs = P.chatDigest(mine, digestSeq, posts)
+		for i = 1, math.min(MAX_TARGETS, #chatTo) do
+			chatTurn = chatTurn % #chatTo + 1
+			for _, m in ipairs(msgs) do L.send(chatTo[chatTurn], m, true) end
+		end
+		N.stats.chatShared = N.stats.chatShared + #posts
+		sent = true
+	end
+	-- tell the others on our server / our number that we report, so they stand by
+	table.sort(near, function(a, b) return a.name < b.name end)
+	for i = 1, math.min(10, #near) do L.send(near[i].name, P.reporting(#items + #posts, near[i].what), true) end
+	return sent
 end
 
 L.onReporter = function(sender, d)
 	local p = L.peers[sender]
-	if p and p.shard == L.shard() then N.claims[L.short(sender)] = clock() end
+	if not p then return end
+	local what = d.what or "fc"
+	if what:find("f", 1, true) and N.sameServer(p.shard) == true then N.claims[L.short(sender)] = clock() end
+	if what:find("c", 1, true) and p.shard == L.shard() then N.chatClaims[L.short(sender)] = clock() end
 end
 
 -- a passed-on group's activities: the first, then the others it's queued for
@@ -562,7 +639,6 @@ local function remoteActs(it)
 end
 
 L.onFinderDigest = function(sender, d)
-	if not N.SHARE_FINDER then return end
 	if d.shard <= 0 or d.shard == L.shard() then return end   -- our own shard we see ourselves
 	local t = clock()
 	local reporter = L.short(sender)
@@ -641,6 +717,7 @@ function N.expireRemote()
 		if t - (r.got or 0) > (r.src == "remotechat" and CHAT_SHARE_KEEP or REMOTE_KEEP) then L.remote[name] = nil gone = true end
 	end
 	for name, at in pairs(N.claims) do if t - at > CLAIM_KEEP then N.claims[name] = nil end end
+	for name, at in pairs(N.chatClaims) do if t - at > CLAIM_KEEP then N.chatClaims[name] = nil end end
 	if not enabled() and next(L.remote) then L.remote = {} gone = true end
 	if gone then changed() end
 end

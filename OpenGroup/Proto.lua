@@ -199,7 +199,12 @@ function P.chatDigest(shard, digest, items)
 	return out
 end
 
-function P.reporting(groups) return ("R1;%d"):format(int(groups, 0, 999) or 0) end
+-- what (0.6.3): "f" the Group Finder (one reporter per server), "c" LFG chat (one per chat
+-- number), or both; older senders leave it out, which means both
+function P.reporting(groups, what)
+	what = type(what) == "string" and what:match("^[fc]+$") or nil
+	return ("R1;%d"):format(int(groups, 0, 999) or 0) .. (what and (";" .. what) or "")
+end
 
 P.TANK, P.HEALER, P.DAMAGE = 1, 2, 4
 
@@ -424,7 +429,7 @@ function P.parse(msg)
 		end
 		return kind, { shard = shard, digest = digest, part = part, parts = parts, items = items }
 	elseif kind == "R1" then
-		return kind, { groups = int(f[2], 0, 999) or 0 }
+		return kind, { groups = int(f[2], 0, 999) or 0, what = (f[3] or ""):match("^[fc]+$") or "fc" }
 	elseif kind == "G1" then
 		local k, l = P.parse("L1;" .. msg:sub(4))
 		if k ~= "L1" then return nil end
