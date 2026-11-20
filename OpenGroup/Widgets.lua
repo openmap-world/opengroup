@@ -520,7 +520,7 @@ W.TILE_ART = {
 	dungeon = { "%sLoadScreenBlackrockDepths", "%sLoadScreenBlackrockSpire", "%sLoadScreenStratholme", "%sLoadScreenScholomance", "%sLoadScreenDeadmines" },
 	quest = { "%sLoadScreenKalimdor", "%sLoadScreenEasternKingdom", "%sLoadScreenEasternKingdoms", "%sLoadScreenKalimdor2" },
 	battle = { "%sLoadScreenWarsongGulch", "%sLoadScreenArathiBasin", "%sLoadScreenPvPBattleground", "%sLoadScreenAlteracValley" },
-	custom = { "%sLoadScreenEasternKingdom", "%sLoadScreenEasternKingdoms", "%sLoadScreenKalimdor" },
+	custom = { "%sLoadScreenDireMaul", "%sLoadScreenMonastery", "%sLoadScreenUldaman", "%sLoadScreenEasternKingdom", "%sLoadScreenKalimdor" },
 	summon = { "%sLoadScreenEasternKingdom" },
 }
 local artFound = {}
@@ -580,6 +580,9 @@ function W.tile(parent)
 	b.down:Hide()
 	b:SetScript("OnMouseDown", function(self) self.down:Show() end)
 	b:SetScript("OnMouseUp", function(self) self.down:Hide() end)
+	-- hover lifts the faded picture a little
+	b:SetScript("OnEnter", function(self) if self.file then self.art:SetAlpha(0.5) end end)
+	b:SetScript("OnLeave", function(self) if self.file then self.art:SetAlpha(0.3) end self.down:Hide() end)
 	b.sub = b:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 	b.sub:SetPoint("BOTTOMLEFT", b.window, "BOTTOMLEFT", 14, 12)
 	b.sub:SetPoint("RIGHT", b.window, "RIGHT", -12, 0)
@@ -598,11 +601,14 @@ function W.tile(parent)
 		local w, h = self.window:GetSize()
 		if not (w and h and w > 0 and h > 0) then return end
 		if self.file then
-			-- a loading screen (4:3): cover the window, centred
-			local ratio = 4 / 3
+			-- a loading screen (4:3): zoomed well in on its lower middle, past the logo at the top
+			local ratio, zoom = 4 / 3, 1.8
+			local aw, ah
+			if w / h > ratio then aw, ah = w, w / ratio else aw, ah = h * ratio, h end
+			aw, ah = aw * zoom, ah * zoom
 			self.art:ClearAllPoints()
-			self.art:SetPoint("CENTER", self.window, "CENTER")
-			if w / h > ratio then self.art:SetSize(w, w / ratio) else self.art:SetSize(h * ratio, h) end
+			self.art:SetPoint("CENTER", self.window, "CENTER", 0, ah * 0.14)
+			self.art:SetSize(aw, ah)
 		else
 			-- the banner (408 x 54): pinned top right, at most 1.4x its own height, over the dark card
 			local info = self.atlas and C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(self.atlas)
@@ -629,11 +635,12 @@ function W.tile(parent)
 		self.atlas = atlas
 		self.file = W.tileArt(W.kindOf(name))
 		if self.file then
+			-- a quiet background: grey and faded, so the name stays the thing you read
 			self.art:SetTexture(self.file)
 			self.art:SetTexCoord(0, 1, 0, 1)
-			self.art:SetDesaturated(false)
-			if tinted then self.art:SetVertexColor(tint[1], tint[2], tint[3]) else self.art:SetVertexColor(1, 1, 1) end
-			self.art:SetAlpha(1)
+			self.art:SetDesaturated(true)
+			self.art:SetVertexColor(1, 1, 1)
+			self.art:SetAlpha(0.3)
 		elseif atlas then
 			self.art:SetAtlas(atlas)
 			self.art:SetDesaturated(tinted == true)

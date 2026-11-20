@@ -147,6 +147,10 @@ run()
 def listing(c, leader): return clients[c].eval("function(l) local x = OpenGroup.listings[l] return x and (OpenGroup.titleOf(x)..' acts '..table.concat(x.acts, ',')..' shard '..x.shard..' hops '..x.hops..' '..x.class..' need '..x.need) end")(leader)
 for c in ["Bob B","Cat C","Dan D"]: print(c, "sees:", listing(c, "Ann A"))
 assert listing("Bob B","Ann A") and listing("Cat C","Ann A") and listing("Dan D","Ann A")
+# Dan heard it passed on (2 hops): he asked Ann, she answered with her own listing, so it's confirmed
+dan_conf = clients["Dan D"].eval("function() local x = OpenGroup.listings['Ann A'] return x and not x.unconfirmed end")()
+print("Dan's copy confirmed by Ann:", dan_conf)
+assert dan_conf
 
 # a listing stays alive past five minutes while its leader keeps re-announcing (it used to expire)
 def advance(sec):
@@ -194,6 +198,27 @@ assert not listing("Bob B","Ann A")
 # ping
 clients["Ann A"].eval("function(n) OpenGroup.ping(n) end")("Bob B"); run()
 print("ping:", [m for m in clients["Ann A"].globals().PRINTED.values() if "ping" in m][-1])
+
+# guards: a passed-on listing for a leader who never answers is dropped after a minute
+d = clients["Dan D"]
+d.globals().FIRE("CHAT_MSG_ADDON", "OpenGroup", "L1;Nobody N;5;61;60;3;0;1;MAGE;4;2;30;0;0;;fake", "WHISPER", "Cat C")
+was = d.eval("function() local x = OpenGroup.listings['Nobody N'] return x and x.unconfirmed end")()
+d.execute("CLOCK = CLOCK + 65"); d.globals().TICKERS[2]()
+gone = d.eval("function() return OpenGroup.listings['Nobody N'] == nil end")()
+print("fake relayed listing: unconfirmed", was, "| dropped", gone)
+assert was and gone
+# a flood from one sender: past the burst, messages are dropped
+before = d.eval("function() return OpenGroup.stats.dropped or 0 end")()
+for i in range(40): d.globals().FIRE("CHAT_MSG_ADDON", "OpenGroup", "P1;tok%d" % i, "WHISPER", "Spam S")
+after = d.eval("function() return OpenGroup.stats.dropped or 0 end")()
+print("flood dropped:", after - before)
+assert after - before >= 15
+# your ignore list: nothing from them is kept
+d.execute("C_FriendList = C_FriendList or {} C_FriendList.IsIgnored = function(n) return n == 'Bad B' end")
+d.globals().FIRE("CHAT_MSG_ADDON", "OpenGroup", "L1;Bad B;1;61;60;3;0;0;MAGE;4;2;30;0;0;;x", "WHISPER", "Bad B")
+d.globals().FIRE("CHAT_MSG_ADDON", "OpenGroup", "L1;Bad B;1;61;60;3;0;1;MAGE;4;2;30;0;0;;x", "WHISPER", "Cat C")
+print("ignored player's listing kept:", d.eval("function() return OpenGroup.listings['Bad B'] ~= nil end")())
+assert d.eval("function() return OpenGroup.listings['Bad B'] == nil end")()
 
 # your-shard rows: chat parsing and the game's Group Finder results, with secret values skipped
 nb = LuaRuntime()

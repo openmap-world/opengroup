@@ -31,9 +31,13 @@ Listings are re-sent every 90 seconds and expire 5 minutes after the last update
 
 Nothing is posted in public chat unless you leave "Post in LFG chat" ticked.
 
+## Privacy
+
+OpenGroup only talks to other players who run it, through the game's hidden addon messages. It has no internet access and sends nothing anywhere else. What other users can see is listed above. Players on your ignore list are hidden everywhere in OpenGroup, and their messages are ignored.
+
 ## Install
 
-Install it from CurseForge, or copy the `OpenGroup` folder into `World of Warcraft\_forever_\Interface\AddOns`.
+Install it from [CurseForge](https://www.curseforge.com/projects/1818236), or download the zip from the [releases](https://github.com/openmap-world/opengroup/releases) and copy the `OpenGroup` folder into `World of Warcraft\_forever_\Interface\AddOns`.
 
 Type `/og` or click the minimap button to open it.
 

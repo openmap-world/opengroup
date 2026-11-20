@@ -176,7 +176,8 @@ end
 function L.recent(max, liveOnly)
 	local src = liveOnly and L.live() or L.peers
 	local list = {}
-	for name, p in pairs(src) do list[#list + 1] = { name, p.seen or 0 } end
+	-- (players on your ignore list are left out: not shown, not whispered)
+	for name, p in pairs(src) do if not (L.ignored and L.ignored(name)) then list[#list + 1] = { name, p.seen or 0 } end end
 	table.sort(list, function(a, b) return a[2] > b[2] end)
 	local out = {}
 	for i = 1, math.min(max or #list, #list) do out[i] = list[i][1] end
@@ -228,11 +229,63 @@ local function notePeerVersion(v)
 	end
 end
 
+-- --------------------------------------------------------------------------------------------
+-- Guarding against other clients (anyone can run their own): your ignore list, a per-sender
+-- message budget, caps on what's kept, and relayed listings checked with their leader.
+
+-- on your ignore list: nothing from them is shown, answered or invited
+function L.ignored(name)
+	if type(name) ~= "string" or name == "" or not (C_FriendList and C_FriendList.IsIgnored) then return false end
+	local ok, yes = pcall(C_FriendList.IsIgnored, L.short(name))
+	return ok and yes == true
+end
+
+-- each sender gets a burst of 20 messages, refilled at one a second; past that they're dropped
+local budget = {}
+local BUDGET_MAX, BUDGET_RATE = 20, 1
+function L.spend(sender)
+	local t = GetTime()
+	local b = budget[sender]
+	if not b then b = { n = BUDGET_MAX, t = t } budget[sender] = b end
+	b.n = math.min(BUDGET_MAX, b.n + (t - b.t) * BUDGET_RATE)
+	b.t = t
+	if b.n < 1 then L.stats.dropped = (L.stats.dropped or 0) + 1 return false end
+	b.n = b.n - 1
+	return true
+end
+local function pruneBudgets()
+	local t = GetTime()
+	for name, b in pairs(budget) do if t - b.t > 120 then budget[name] = nil end end
+end
+
+L.MAX_LISTINGS = 300
+-- A listing passed on by someone else may name any leader. It shows as unconfirmed, and the leader
+-- gets a hidden hello: if they're listed they answer with their own listing (confirmed); if no
+-- listing of theirs arrives within a minute, the passed-on one is dropped.
+L.directAt = {}   -- [leader] = when their own listing last came straight from them
+L.verify = {}     -- [leader] = when we asked
+local VERIFY_WAIT = 60
+
 local function store(l, via)
 	local fresh = L.listings[l.leader] == nil
 	l.got = now() - (l.age or 0)
 	l.via = via
+	if l.hops == 0 then
+		L.directAt[l.leader], L.verify[l.leader] = now(), nil
+	elseif not (L.directAt[l.leader] and now() - L.directAt[l.leader] < P.MAX_AGE) then
+		l.unconfirmed = true
+		if not L.verify[l.leader] then
+			L.verify[l.leader] = now()
+			L.send(l.leader, P.hello(L.shard(), UnitLevel("player")), true)
+		end
+	end
 	L.listings[l.leader] = l
+	-- too many held: the oldest go
+	if fresh and L.count(L.listings) > L.MAX_LISTINGS then
+		local oldest
+		for name, x in pairs(L.listings) do if not oldest or x.got < L.listings[oldest].got then oldest = name end end
+		if oldest then L.listings[oldest] = nil end
+	end
 	if fresh and L.onNewListing then pcall(L.onNewListing, l) end
 	if L.onChange then L.onChange() end
 end
@@ -265,8 +318,11 @@ local function sendKnown(to, max)
 	end
 end
 
+local answeredAt = {}
 function L.receive(msg, sender)
 	if L.isMe(sender) then return end
+	if L.ignored(sender) then L.stats.ignored = (L.stats.ignored or 0) + 1 return end
+	if not L.spend(sender) then return end
 	local kind, d = P.parse(msg)
 	if not kind then L.stats.bad = L.stats.bad + 1 return end
 	L.stats.got = L.stats.got + 1
@@ -274,6 +330,9 @@ function L.receive(msg, sender)
 		local isNew = L.peers[sender] == nil
 		L.addPeer(sender, d.shard, d.level, d.version)
 		notePeerVersion(d.version)
+		-- answer a given sender's hello at most every 30 seconds (one hello makes several whispers)
+		if answeredAt[sender] and now() - answeredAt[sender] < 30 then return end
+		answeredAt[sender] = now()
 		L.send(sender, P.answer(L.shard(), UnitLevel("player")))
 		if L.mine then L.send(sender, P.listing(L.mineForSend())) end
 		sendKnown(sender, 5)
@@ -306,9 +365,12 @@ function L.receive(msg, sender)
 	elseif kind == "L1" then
 		L.peers[sender] = L.peers[sender] or { shard = 0, level = 0 }
 		L.peers[sender].seen = now()
-		if L.isMe(d.leader) then return end
+		if L.isMe(d.leader) or L.ignored(d.leader) then return end
 		-- the leader's own message: whisper the name the game gave us, it's the reliable spelling
 		if d.hops == 0 then d.leader = sender end
+		-- a straight-from-the-leader listing settles an unconfirmed one even when it isn't newer
+		local had = L.listings[d.leader]
+		if d.hops == 0 and had and had.unconfirmed and d.seq >= had.seq then had.unconfirmed = nil L.directAt[d.leader] = now() L.verify[d.leader] = nil end
 		local held = L.listings[d.leader]
 		if P.isNewer(held, d) or P.isRefresh(held, d, now()) then
 			store(d, sender)
@@ -492,6 +554,13 @@ local function tick()
 		for _, name in ipairs(L.recent(PEER_MAX)) do keep[name] = true end
 		for name in pairs(L.peers) do if not keep[name] then L.peers[name] = nil end end
 	end
+	for leader, asked in pairs(L.verify) do
+		local l = L.listings[leader]
+		if l and l.unconfirmed and t - asked > VERIFY_WAIT then L.listings[leader] = nil changed = true end
+		if t - asked > 1800 then L.verify[leader] = nil end
+	end
+	for name, at in pairs(answeredAt) do if t - at > 60 then answeredAt[name] = nil end end
+	pruneBudgets()
 	sinceAnnounce = sinceAnnounce + 5
 	if sinceAnnounce >= ANNOUNCE_EVERY then sinceAnnounce = 0 L.announce() end
 	if changed and L.onChange then L.onChange() end
@@ -990,7 +1059,7 @@ function L.whisperList(ogOnly)
 	local out = {}
 	for name, c in pairs(L.whispers) do
 		c.linked = L.whisperLinked(name)
-		if c.linked or not ogOnly then out[#out + 1] = c end
+		if (c.linked or not ogOnly) and not L.ignored(name) then out[#out + 1] = c end
 	end
 	table.sort(out, function(a, b)
 		if a.linked ~= b.linked then return a.linked end

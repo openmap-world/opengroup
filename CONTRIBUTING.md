@@ -14,7 +14,8 @@ Open an issue and describe how you'd use it in game.
 
 - Keep it plain Lua with no libraries.
 - OpenGroup should never post in public chat unless the player turned that on.
-- If you change a message format, update the notes at the top of `OpenGroup/Proto.lua` and make sure older versions ignore it safely.
+- If you change a message format, follow the rules at the top of `OpenGroup/Proto.lua`: add new fields only at the end, give new messages a new type, and keep older versions working. Update the notes there and add a test for the old format in `tools/test.py`.
+- Treat everything that comes from another player as untrusted: check numbers, cut text to length, and drop anything that doesn't fit.
 - Run the tests before you open the pull request:
 
 ```

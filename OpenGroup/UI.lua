@@ -623,6 +623,7 @@ local function buildRow(row)
 		if l.src == "finder" then GameTooltip:AddLine("Listed in the game's Group Finder (your shard only)", .5, .5, .5)
 		elseif l.src == "chat" then GameTooltip:AddLine(("Posted in %s chat (your shard only)"):format(l.chan or "a"), .5, .5, .5)
 		else GameTooltip:AddLine(l.hops == 0 and "Heard from them directly" or ("Passed on by %s"):format(L.short(l.via)), .5, .5, .5) end
+		if l.unconfirmed then GameTooltip:AddLine("Not confirmed by the leader yet. OpenGroup is checking with them.", 1, .6, .2, true) end
 		if r and r.dim then GameTooltip:AddLine(l.size >= 5 and "This group is full." or "They don't need a role you play.", 1, .5, .3) end
 		GameTooltip:AddLine(l.size > 1 and "Double-click to ask to join." or "Double-click to invite.", 0, 1, 0)
 		GameTooltip:Show()
@@ -726,8 +727,8 @@ local function fillRow(row, d)
 	row.size:SetText(r.kind == "group" and (l.sizeGuess and (GREY .. "group|r") or (l.size .. "/5")) or r.kind == "player" and (GREY .. "solo|r") or "")
 	row.note:SetText(note)
 	row.note:SetShown(not compact and note ~= "")
-	row.shard:SetText(r.where == "finder" and (GREY .. "Group Finder|r") or r.where == "chat" and (GREY .. (l.chan or "LFG chat") .. "|r")
-		or r.where == "mine" and (GREY .. "Your shard|r") or (GOLD .. "Shard " .. l.shard .. "|r"))
+	row.shard:SetText((r.where == "finder" and (GREY .. "Group Finder|r") or r.where == "chat" and (GREY .. (l.chan or "LFG chat") .. "|r")
+		or r.where == "mine" and (GREY .. "Your shard|r") or (GOLD .. "Shard " .. l.shard .. "|r")) .. (l.unconfirmed and (GREY .. " ?|r") or ""))
 	-- Needs: one icon per open spot (the class where one is set), else the role bits; groups show
 	-- what they want, players the roles they play
 	local icons = {}
@@ -948,6 +949,7 @@ function browse.refresh()
 	local lvl, me = UnitLevel("player") or 0, browse.me()
 	local rows, matches, total, outside = {}, {}, 0, 0
 	local function consider(l)
+		if L.ignored(l.leader) then return end
 		total = total + 1
 		local r = L.rowOf(l, myShard)
 		r.dist = L.levelDistance(r, lvl)
@@ -1730,7 +1732,13 @@ list.tiles = banners
 				b:ClearAllPoints()
 				b:SetPoint("TOPLEFT", 14 + col * (w + gap), y - row * 28)
 				b:SetWidth(w)
+				-- the full name if it fits, else the short one; the level range is never cut
 				b.text:SetText(W.levelText(pk.id, lvl))
+				local info = A.get(pk.id)
+				if info and b.text.GetStringWidth and (b.text:GetStringWidth() or 0) > w - 16 and info.short and info.short ~= info.name then
+					local r = A.range(pk.id)
+					b.text:SetText(A.levelColor(pk.id, lvl) .. info.short .. (r ~= "" and ("  " .. r) or "") .. "|r")
+				end
 				b:SetScript("OnClick", function()
 					W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON")
 					draft.acts = { pk.id }

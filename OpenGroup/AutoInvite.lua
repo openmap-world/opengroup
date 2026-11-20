@@ -84,7 +84,8 @@ function AI.candidates()
 	local c, m, out = AI.cfg(), L.mine, {}
 	if not m then return out end
 	local function add(name, class, level, need, src)
-		if type(name) == "string" and name ~= "" and not L.isMe(name) then
+		-- not yourself, not anyone on your ignore list
+		if type(name) == "string" and name ~= "" and not L.isMe(name) and not L.ignored(name) then
 			out[#out + 1] = { name = name, class = class, level = level or 0, need = need or 0, src = src }
 		end
 	end
@@ -92,7 +93,8 @@ function AI.candidates()
 		for name, a in pairs(AI.asks) do if now() - a.at < ASK_KEEP then add(name, a.class, a.level, a.need, "ask") end end
 	end
 	local function solo(l) return (l.size or 1) <= 1 and not P.isBGQ(l.cat) and l.cat ~= P.SUMMON_CAT and sameThing(m, l) end
-	if c.src.og then for _, l in pairs(L.listings) do if solo(l) then add(l.leader, l.class, l.level, l.need, "og") end end end
+	-- (a passed-on listing their leader hasn't confirmed yet isn't invited)
+	if c.src.og then for _, l in pairs(L.listings) do if solo(l) and not l.unconfirmed then add(l.leader, l.class, l.level, l.need, "og") end end end
 	for _, l in pairs(L.nearby or {}) do
 		if solo(l) and ((l.src == "finder" and c.src.finder) or (l.src == "chat" and c.src.chat)) then add(l.leader, l.class, l.level, l.need, l.src) end
 	end

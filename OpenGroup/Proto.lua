@@ -34,6 +34,17 @@
 --   G0;<seq>                          to PARTY/RAID: the leader unlisted the group
 --   GQ                                to PARTY/RAID: "what is our group listed for?" (after a reload)
 -- Fields never contain ";" or "|" (stripped on the way in and out). A message stays under 250 bytes.
+--
+-- Keeping versions compatible (anyone can run their own client, and players update at different
+-- times), so a change to this format must follow these rules:
+--   * Never change what an existing field means or where it sits. Add new fields only at the end
+--     of a message (like L1's <spots>); older clients read the fields they know and ignore the rest.
+--   * A new kind of message gets a new type ("G1", "J1" ...). Clients ignore types they don't know.
+--   * Bump the number in a type ("L1" -> "L2") only for a change older clients can't read safely,
+--     and keep reading the old one for at least a release.
+--   * Everything from another player is untrusted: numbers are range-checked, text is cleaned and
+--     cut to length, and anything malformed is dropped (P.parse never errors).
+--   * The hello carries the sender's version (P.VERSION), so /og status can show who runs what.
 
 local P = {}
 OpenGroup_Proto = P
@@ -70,7 +81,7 @@ local function split(s)
 	return out
 end
 
-P.VERSION = "0.6.0-beta"
+P.VERSION = "0.6.1-test"
 P.MAX_PX = 10           -- names per peer-exchange message
 
 function P.hello(shard, level) return ("H1;%d;%d;%s"):format(shard or 0, level or 0, clean(P.VERSION, 16)) end
