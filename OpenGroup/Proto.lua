@@ -199,43 +199,208 @@ function P.chatDigest(shard, digest, items)
 	return out
 end
 
--- World chat (0.6.3): a chat number's useful LookingForGroup and Trade lines, passed on down a
--- relay tree. T1;chan;digest;part;parts;hop;name^age^kind^text~... (kind l = LookingForGroup,
--- t = Trade; item links travel as {i<itemID>}). Older versions ignore T1.
-P.MAX_FEED, P.FEED_TEXT, P.FEED_HOPS = 40, 160, 6
-function P.feedDigest(chan, digest, entries)
+-- World chat (0.6.3): a chat number's useful LookingForGroup and Trade lines, many to a batch,
+-- compressed and spread over as many messages as it takes. Older versions ignore T1.
+--   T1;origin;chan;digest;part;parts;hop;<piece of the packed batch>
+-- The batch is its lines, name^age^kind^chan^text joined with ~ (kind l = LookingForGroup,
+-- t = Trade; links travel as {i<item>}, {e<enchant>}, {s<spell>}), LZ-compressed against a
+-- built-in dictionary of what trade chat says a lot, then written in 91 safe characters (no
+-- ; | ~ or control bytes). Pure Lua 5.1, no bit library.
+P.FEED_TEXT, P.FEED_HOPS, P.FEED_MAX = 160, 6, 120
+
+-- what trade and LFG chat say all the time: matches against this cost three bytes
+local DICT = table.concat({
+	"WTS ", "WTB ", "WTT ", "LFM ", "LFG ", "LF1M ", "LF2M ", "LF3M ", "LF ", " need ", "need ", " heals", " healer", " tank", " dps",
+	" each", " whisper me", " pst", " PST", " pm me", " w/ ", " with ", " for ", " and ", " your mats", " tips", " crafting",
+	" selling ", " buying ", " cheap", " stack", "x20", "g each", "g ea", " 1g", " 2g", " 5g", "10g", " g ", "{i", "{e", "{s", "}",
+	"Enchant", "enchant", "Arcanite", "Thorium", "Mithril", "Runecloth", "Mooncloth", "Felcloth", "Elixir", "Flask", "Potion",
+	"Blackrock Depths", "BRD", "UBRS", "LBRS", "Stratholme", "strat", "Scholomance", "scholo", "Dire Maul", "Molten Core",
+	"^t^", "^l^", "~", " Hi", "anyone", "summon", "quest", "group", "Ony", "ZG", "MC ", "need all", "1 more", "2 more",
+})
+local DICT_LEN = #DICT
+
+-- LZ77: control byte c < 128 = c+1 literal bytes follow; c >= 128 = a match of c-125 bytes
+-- (3..130) at the 2-byte distance that follows
+function P.lz(data)
+	local buf = DICT .. data
+	local n, start = #buf, DICT_LEN + 1
+	local heads = {}
+	local function key(i) return buf:sub(i, i + 2) end
+	for i = 1, DICT_LEN - 2 do local k = key(i) local h = heads[k] if not h then h = {} heads[k] = h end h[#h + 1] = i end
+	local out, lit = {}, {}
+	local function flush()
+		local i = 1
+		while i <= #lit do
+			local j = math.min(#lit, i + 127)
+			out[#out + 1] = string.char(j - i)
+			out[#out + 1] = table.concat(lit, "", i, j)
+			i = j + 1
+		end
+		lit = {}
+	end
+	local i = start
+	while i <= n do
+		local bestLen, bestDist = 0, 0
+		if i + 2 <= n then
+			local h = heads[key(i)]
+			if h then
+				for c = #h, math.max(1, #h - 31), -1 do
+					local p = h[c]
+					local dist = i - p
+					if dist > 65535 then break end
+					local l = 3
+					while i + l <= n and l < 130 and buf:byte(p + l) == buf:byte(i + l) do l = l + 1 end
+					if l > bestLen then bestLen, bestDist = l, dist end
+					if l >= 130 then break end
+				end
+			end
+		end
+		local stop = bestLen >= 3 and i + bestLen - 1 or i
+		for k = i, stop do
+			if k + 2 <= n then local kk = key(k) local h = heads[kk] if not h then h = {} heads[kk] = h end h[#h + 1] = k end
+		end
+		if bestLen >= 3 then
+			flush()
+			out[#out + 1] = string.char(125 + bestLen, math.floor(bestDist / 256), bestDist % 256)
+			i = i + bestLen
+		else
+			lit[#lit + 1] = buf:sub(i, i)
+			i = i + 1
+		end
+	end
+	flush()
+	return table.concat(out)
+end
+function P.unlz(z)
+	local buf = DICT
+	local i, n = 1, #z
+	while i <= n do
+		local c = z:byte(i)
+		if c < 128 then
+			local s = z:sub(i + 1, i + c + 1)
+			if #s < c + 1 then return nil end
+			buf = buf .. s
+			i = i + c + 2
+		else
+			local len = c - 125
+			local hi, lo = z:byte(i + 1), z:byte(i + 2)
+			if not lo then return nil end
+			local dist = hi * 256 + lo
+			local from = #buf - dist + 1
+			if dist < 1 or from < 1 then return nil end
+			-- overlapping copies (distance shorter than the length) repeat what was just written
+			local s = ""
+			for k = 0, len - 1 do
+				local pos = from + k
+				local ch = pos <= #buf and buf:sub(pos, pos) or s:sub(pos - #buf, pos - #buf)
+				s = s .. ch
+			end
+			buf = buf .. s
+			i = i + 3
+		end
+		if #buf - DICT_LEN > 65536 then return nil end
+	end
+	return buf:sub(DICT_LEN + 1)
+end
+
+-- 91 safe characters: printable ASCII without ; | ~
+local B91 = {}
+do
+	for c = 33, 126 do local ch = string.char(c) if ch ~= ";" and ch ~= "|" and ch ~= "~" then B91[#B91 + 1] = ch end end
+end
+local B91_IDX = {}
+for i, ch in ipairs(B91) do B91_IDX[ch:byte()] = i - 1 end
+function P.b91enc(data)
+	local out, b, nb = {}, 0, 0
+	for i = 1, #data do
+		b = b + data:byte(i) * 2 ^ nb
+		nb = nb + 8
+		if nb > 13 then
+			local v = b % 8192
+			if v > 88 then b = math.floor(b / 8192) nb = nb - 13
+			else v = b % 16384 b = math.floor(b / 16384) nb = nb - 14 end
+			out[#out + 1] = B91[v % 91 + 1] .. B91[math.floor(v / 91) + 1]
+		end
+	end
+	if nb > 0 then
+		out[#out + 1] = B91[b % 91 + 1]
+		if nb > 7 or b > 90 then out[#out + 1] = B91[math.floor(b / 91) + 1] end
+	end
+	return table.concat(out)
+end
+function P.b91dec(s)
+	local out, b, nb, v = {}, 0, 0, -1
+	for i = 1, #s do
+		local c = B91_IDX[s:byte(i)]
+		if not c then return nil end
+		if v < 0 then v = c
+		else
+			v = v + c * 91
+			b = b + v * 2 ^ nb
+			nb = nb + ((v % 8192) > 88 and 13 or 14)
+			repeat
+				out[#out + 1] = string.char(b % 256)
+				b = math.floor(b / 256)
+				nb = nb - 8
+			until nb <= 7
+			v = -1
+		end
+	end
+	if v >= 0 then out[#out + 1] = string.char((b + v * 2 ^ nb) % 256) end
+	return table.concat(out)
+end
+
+local function feedClean(s, len) return (clean(s, len):gsub("[~%^]", " ")) end
+-- a batch of lines -> its messages
+function P.feedPack(origin, chan, digest, entries)
 	local list = {}
 	for _, it in ipairs(entries or {}) do
-		if #list >= P.MAX_FEED then break end
-		local name, text = chatClean(it.leader, P.NAME_LEN), chatClean(it.text, P.FEED_TEXT)
-		local kind = it.kind == "t" and "t" or "l"
-		if name ~= "" and text ~= "" then list[#list + 1] = ("%s^%d^%s^%s"):format(name, int(it.age, 0, 86400) or 0, kind, text) end
+		if #list >= P.FEED_MAX then break end
+		local name, text = feedClean(it.leader, P.NAME_LEN), feedClean(it.text, P.FEED_TEXT)
+		if name ~= "" and text ~= "" then
+			list[#list + 1] = ("%s^%d^%s^%d^%s"):format(name, int(it.age, 0, 86400) or 0, it.kind == "t" and "t" or "l", int(it.chan, 0, 99999) or 0, text)
+		end
 	end
-	local head = ("T1;%d;%d;"):format(int(chan, 0, 99999) or 0, int(digest, 0, 2^31) or 0)
-	local parts, cur, len = {}, {}, 0
+	if #list == 0 then return {} end
+	local packed = P.b91enc(P.lz(table.concat(list, "~")))
+	local head = ("T1;%s;%d;%d;"):format(clean(origin, P.NAME_LEN), int(chan, 0, 99999) or 0, int(digest, 0, 2^31) or 0)
 	local room = P.MAX_LEN - #head - 10
-	for _, e in ipairs(list) do
-		if #cur > 0 and len + #e + 1 > room then parts[#parts + 1] = cur cur, len = {}, 0 end
-		cur[#cur + 1] = e
-		len = len + #e + 1
-	end
-	if #cur > 0 then parts[#parts + 1] = cur end
+	local parts = math.ceil(#packed / room)
+	if parts > 99 then return {} end
 	local out = {}
-	for i, part in ipairs(parts) do out[i] = head .. i .. ";" .. #parts .. ";0;" .. table.concat(part, "~") end
+	for i = 1, parts do out[i] = head .. i .. ";" .. parts .. ";0;" .. packed:sub((i - 1) * room + 1, i * room) end
 	return out
+end
+-- the whole packed batch -> its lines (nil if it doesn't unpack)
+function P.feedUnpack(packed)
+	local raw = P.b91dec(packed or "")
+	local text = raw and P.unlz(raw)
+	if not text then return nil end
+	local items = {}
+	for e in text:gmatch("[^~]+") do
+		local name, age, k, chan, t = e:match("^([^%^]+)%^(%d+)%^([lt])%^(%d+)%^(.+)$")
+		name, t = clean(name, P.NAME_LEN), clean(t, P.FEED_TEXT)
+		age, chan = int(age, 0, 86400), int(chan, 0, 99999)
+		if name ~= "" and t ~= "" and age and chan and #items < P.FEED_MAX then
+			items[#items + 1] = { leader = name, age = age, kind = k, chan = chan, text = t }
+		end
+	end
+	return items
 end
 -- the same message one hop further down the tree
 function P.feedHop(msg, hop)
 	local f = split(msg)
-	if f[1] ~= "T1" or #f < 7 then return nil end
-	f[6] = tostring(int(hop, 0, 99) or 0)
+	if f[1] ~= "T1" or #f < 8 then return nil end
+	f[7] = tostring(int(hop, 0, 99) or 0)
 	return table.concat(f, ";")
 end
+-- "send me the last hour": B1;<max lines>
+function P.backlogAsk(max) return ("B1;%d"):format(int(max, 1, 500) or 100) end
 
 -- what (0.6.3): "f" the Group Finder (one reporter per server), "c" LFG chat (one per chat
 -- number), or both; older senders leave it out, which means both
 function P.reporting(groups, what)
-	what = type(what) == "string" and what:match("^[fc]+$") or nil
+	what = type(what) == "string" and what:match("^[fct]+$") or nil
 	return ("R1;%d"):format(int(groups, 0, 999) or 0) .. (what and (";" .. what) or "")
 end
 
@@ -462,22 +627,15 @@ function P.parse(msg)
 		end
 		return kind, { shard = shard, digest = digest, part = part, parts = parts, items = items }
 	elseif kind == "T1" then
-		local chan, digest = int(f[2], 0, 99999), int(f[3], 0, 2^31)
-		local part, parts, hop = int(f[4], 1, 99), int(f[5], 1, 99), int(f[6], 0, 99)
-		if not (chan and chan > 0 and digest and part and parts and hop and part <= parts) then return nil end
-		local items = {}
-		for e in (f[7] or ""):gmatch("[^~]+") do
-			local name, age, k, text = e:match("^([^%^]+)%^(%d+)%^([lt])%^(.+)$")
-			name, text = clean(name, P.NAME_LEN), clean(text, P.FEED_TEXT)
-			age = int(age, 0, 86400)
-			if name ~= "" and text ~= "" and age and #items < P.MAX_FEED then
-				items[#items + 1] = { leader = name, age = age, kind = k, text = text }
-			end
-		end
-		if #items == 0 then return nil end
-		return kind, { chan = chan, digest = digest, part = part, parts = parts, hop = hop, items = items }
+		local origin, chan, digest = clean(f[2] or "", P.NAME_LEN), int(f[3], 0, 99999), int(f[4], 0, 2^31)
+		local part, parts, hop = int(f[5], 1, 99), int(f[6], 1, 99), int(f[7], 0, 99)
+		local piece = f[8] or ""
+		if origin == "" or not (chan and digest and part and parts and hop and part <= parts) or piece == "" or piece:find("[^!-}]") then return nil end
+		return kind, { origin = origin, chan = chan, digest = digest, part = part, parts = parts, hop = hop, piece = piece }
+	elseif kind == "B1" then
+		return kind, { max = int(f[2], 1, 500) or 100 }
 	elseif kind == "R1" then
-		return kind, { groups = int(f[2], 0, 999) or 0, what = (f[3] or ""):match("^[fc]+$") or "fc" }
+		return kind, { groups = int(f[2], 0, 999) or 0, what = (f[3] or ""):match("^[fct]+$") or "fc" }
 	elseif kind == "G1" then
 		local k, l = P.parse("L1;" .. msg:sub(4))
 		if k ~= "L1" then return nil end

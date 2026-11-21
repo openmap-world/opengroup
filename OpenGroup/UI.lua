@@ -3616,7 +3616,7 @@ local chatPage = page("chat")
 		end
 		row.e = e
 		local secs = math.max(0, time() - e.got)
-		row.age:SetText(secs < 60 and "now" or (math.floor(secs / 60) .. "m"))
+		row.age:SetText(secs < 60 and "now" or secs < 3600 and (math.floor(secs / 60) .. "m") or (math.floor(secs / 3600) .. "h"))
 		row.where:SetText(label(e))
 		row.name:SetText(W.classColor(e.class) .. e.leader .. "|r")
 		row.text:SetText(Nb.unpackLinks(e.text))
@@ -3630,7 +3630,7 @@ local chatPage = page("chat")
 			local ok = (e.kind == "t" and flag("chatShowTrade", true)) or (e.kind == "l" and flag("chatShowLFG", true))
 			if ok and e.mine and not flag("chatShowMine", true) then ok = false end
 			if ok and L.ignored(e.leader) then ok = false end
-			if ok and q ~= "" and not (e.leader .. " " .. Nb.unpackLinks(e.text)):lower():find(q, 1, true) then ok = false end
+			if ok and q ~= "" and not Nb.searchText(e):find(q, 1, true) then ok = false end
 			if ok then out[#out + 1] = e end
 		end
 		table.sort(out, function(a, b) return a.got > b.got end)
@@ -3645,13 +3645,18 @@ local chatPage = page("chat")
 		local keys = {}
 		for k in pairs(nums) do keys[#keys + 1] = k end
 		table.sort(keys)
-		C.status:SetText(#keys > 0 and ("From " .. L.CHAN .. " " .. table.concat(keys, ", ") .. " and yours.  " .. #rows .. " lines, last 10 minutes.")
-			or "Only your own chat number so far.")
+		C.status:SetText((#keys > 0 and ("From " .. L.CHAN .. " " .. table.concat(keys, ", ") .. " and yours.  ") or "Only your own chat number so far.  ")
+			.. #rows .. " lines, last 3 hours.")
 		C.empty:SetShown(#rows == 0)
 		C.empty:SetText((Nb.feed and #Nb.feed > 0) and "Nothing matches." or
-			"Trade ads, crafters and group posts from every chat number with an OpenGroup user show up here. Lines from other numbers arrive about every 20 seconds.")
+			"Trade ads, crafters and group posts from every chat number with an OpenGroup user show up here, kept for 3 hours. Lines from other numbers arrive about every 20 seconds.")
 	end
-	C.onShow = C.refresh
+	C.onShow = function()
+		if Nb.bindHistory then Nb.bindHistory() end
+		-- just logged in: ask someone for the last hour
+		if Nb.askBacklog then pcall(Nb.askBacklog) end
+		C.refresh()
+	end
 
 	-- footer: sharing ours
 	local cb = CreateFrame("CheckButton", nil, C.footer, "UICheckButtonTemplate")
@@ -3791,6 +3796,13 @@ SlashCmdList.OPENGROUP = function(msg)
 		table.sort(why)
 		L.print(("hellos %d (%s); people around you waiting %d, asked this session %d"):format(s.probes or 0,
 			#why > 0 and table.concat(why, ", ") or "none yet", #(L.nearQueue or {}), L.count(L.nearAsked or {})))
+		local Nf = OpenGroup_Nearby
+		if Nf and Nf.feed then
+			local st = Nf.stats
+			L.print(("World chat: %d lines kept; sent %d, received %d, passed on %d, left out by the budget %d, backlogs answered %d; in Trade: %s; sharing LFG %s, Trade %s"):format(
+				#Nf.feed, st.feedOut or 0, st.feedIn or 0, st.feedFwd or 0, st.feedDropped or 0, st.backlogs or 0,
+				Nf.inTrade() and "yes" or "no", Nf.shareChat() and "on" or "off", Nf.shareTrade() and "on" or "off"))
+		end
 		local found = {}
 		for _, n in ipairs({ "LFGParentFrame", "PVEFrame", "GroupFinderFrame", "LFGListingFrame" }) do if _G[n] then found[#found + 1] = n end end
 		L.print("Group Finder tab on: " .. tostring(OpenGroup_GroupFinderTab and OpenGroup_GroupFinderTab.attach() and "yes" or "not yet") ..

@@ -469,6 +469,8 @@ function L.receive(msg, sender)
 	elseif kind == "T1" then
 		if L.peers[sender] then L.peers[sender].seen = now() end
 		if L.onFeed then pcall(L.onFeed, sender, d, msg) end
+	elseif kind == "B1" then
+		if L.onBacklogAsk then pcall(L.onBacklogAsk, sender, d) end
 	elseif kind == "C1" then
 		if L.peers[sender] then L.peers[sender].seen = now() end
 		if L.onChatDigest then pcall(L.onChatDigest, sender, d) end
