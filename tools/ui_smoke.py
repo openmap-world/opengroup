@@ -903,5 +903,15 @@ assert(#said == 1 and OpenGroup.newest == "0.7.0", "two players running it: it's
 OpenGroup.print = savePrint2
 OpenGroup.newest, OpenGroup.toldNewer = nil, nil
 print("version notice ok")
+-- the Group column's slots
+local Bs = OpenGroup_UI.browse
+local function kinds(sl) local k = {} for i, x in ipairs(sl) do k[i] = x.kind .. (x.role and x.role > 0 and x.role or "") end return table.concat(k, ",") .. (sl.text and ("|" .. sl.text) or "") end
+local g3 = { size = 3, need = 2, class = "PRIEST", members = { { class = "PRIEST", role = 4 }, { class = "WARRIOR", role = 1 }, { class = "MAGE", role = 4 } } }
+print("slots:", kinds(Bs.slotsOf(g3, { kind = "group" })))
+assert(kinds(Bs.slotsOf(g3, { kind = "group" })) == "member4,member1,member4,open2,any", "members, then the healer wanted, then a free place")
+assert(kinds(Bs.slotsOf({ size = 1, need = 6, class = "DRUID" }, { kind = "player" })) == "member2|solo", "solo: one slot and solo")
+print("raid:", kinds(Bs.slotsOf({ size = 12, need = 2 }, { kind = "group" }))) assert(kinds(Bs.slotsOf({ size = 12, need = 2 }, { kind = "group" })) == "|12/20", "a raid: a count")
+assert(kinds(Bs.slotsOf({ size = 2, need = 1, class = "ROGUE" }, { kind = "group" })) == "member,unknown,open1,any,any", "a chat post: the poster, ? for the rest")
+print("group slots ok")
 print("smoke OK")
 ''')

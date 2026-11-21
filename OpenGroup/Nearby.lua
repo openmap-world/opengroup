@@ -329,8 +329,24 @@ local function finderListing(id, now)
 			if (num(c.DAMAGER) or 3) < 3 then need = need + DPS end
 		end
 	end
+	-- who's in it: class and assigned role per member (a party; raids just count)
+	local members
+	if size > 1 and size <= 5 and C_LFGList.GetSearchResultPlayerInfo then
+		local ROLE = { TANK = TANK, HEALER = HEAL, DAMAGER = DPS }
+		members = {}
+		for i = 1, size do
+			local okM, m = pcall(C_LFGList.GetSearchResultPlayerInfo, id, i)
+			local cls, role = nil, 0
+			if okM and readable(m) and type(m) == "table" then
+				cls = str(m.classFilename)
+				local ar = str(m.assignedRole)
+				role = ar and ROLE[ar] or 0
+			end
+			members[#members + 1] = { class = cls, role = role }
+		end
+	end
 	return {
-		leader = leader, src = "finder", size = size, acts = acts, need = need,
+		leader = leader, src = "finder", size = size, acts = acts, need = need, members = members,
 		class = who and str(who.classFilename), level = who and num(who.level) or 0,
 		note = str(info.comment) or "", got = now,
 	}

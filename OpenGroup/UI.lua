@@ -376,7 +376,7 @@ box:SetPoint("BOTTOMRIGHT", -24, 6)
 
 -- the column headers above the list: click one to sort by it, again to reverse, a third time for
 -- the default order (what suits you best first)
-browse.COL_LABELS = { cls = "", lvl = "Lvl", leader = "Leader", act = "Activity", levels = "Levels", size = "Size", needs = "Roles", where = "Where", age = "Age" }
+browse.COL_LABELS = { cls = "", lvl = "Lvl", leader = "Leader", act = "Activity", levels = "Levels", size = "Size", needs = "Group", where = "Where", age = "Age" }
 browse.colHead = CreateFrame("Frame", nil, browse.content)
 browse.colHead:SetHeight(18)
 browse.colButtons = {}
@@ -587,10 +587,15 @@ local function buildRow(row)
 	row.note:SetTextColor(0.25, 1, 0.25)
 	row.rolesLabel = fs("GameFontHighlight")   -- the summons / queue icon in the Needs column
 	row.roles = {}
-	row.plus = {}
-	for i = 1, P.MAX_SPOTS do
+	-- the Group column: five slots, members (class icon, a small role badge) then open spots
+	-- (the role wanted, with a green +)
+	row.plus, row.badge = {}, {}
+	for i = 1, 5 do
 		row.roles[i] = row:CreateTexture(nil, "ARTWORK")
-		-- a group's icons are roles it still needs: a small green + on each
+		row.badge[i] = row:CreateTexture(nil, "OVERLAY")
+		row.badge[i]:SetSize(9, 9)
+		row.badge[i]:SetPoint("CENTER", row.roles[i], "BOTTOMRIGHT", -1, 1)
+		row.badge[i]:Hide()
 		row.plus[i] = row:CreateFontString(nil, "OVERLAY", "GameFontGreenSmall")
 		row.plus[i]:SetPoint("CENTER", row.roles[i], "BOTTOMRIGHT", -1, 2)
 		row.plus[i]:SetText("+")
@@ -694,10 +699,10 @@ local function layoutRow(row, compact)
 	put(row.class, "cls") put(row.level, "lvl") put(row.name, "leader") put(row.act, "act")
 	put(row.levels, "levels") put(row.size, "size") put(row.shard, "where") put(row.age, "age")
 	local needs = cols.at.needs
-	local s = compact and 15 or 17
+	local s = compact and 15 or 16
 	for i, t in ipairs(row.roles) do
 		t:SetSize(s, s)
-		at(t, "LEFT", row, "LEFT", 10 + needs.x + (i - 1) * (s + 2), y)
+		at(t, "LEFT", row, "LEFT", 10 + needs.x + (i - 1) * (s + 3), y)
 	end
 	at(row.rolesLabel, "LEFT", row, "LEFT", 10 + needs.x, y)
 	local actCol = cols.at.act
@@ -706,10 +711,46 @@ local function layoutRow(row, compact)
 	row.note:SetWidth(math.max(60, (noteRight.x + noteRight.w) - actCol.x))
 end
 
+local QUESTION_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
+-- what goes in the Group column: { {kind = "member"|"unknown"|"open"|"any", class, role}, text = "solo"|"12/40"|nil }
+function browse.slotsOf(l, r)
+	local out = {}
+	if r.kind == "summon" or r.kind == "bgq" then return out end
+	local size = l.size or 1
+	if size > 5 then
+		out.text = ("%d/%d"):format(size, size <= 10 and 10 or size <= 20 and 20 or 40)
+		return out
+	end
+	if r.kind == "player" then
+		local role = 0
+		for _, b in ipairs(ROLES) do if has(l.need or 0, b) then role = b break end end
+		out[1] = { kind = "member", class = l.class, role = role }
+		out.text = "solo"
+		return out
+	end
+	-- members: who we know, else the leader and "?" for the rest
+	local members = type(l.members) == "table" and l.members or nil
+	if members then
+		for _, m in ipairs(members) do if #out < 5 then out[#out + 1] = { kind = m.class and "member" or "unknown", class = m.class, role = m.role } end end
+	else
+		out[1] = { kind = "member", class = l.class, role = 0 }
+		for _ = 2, math.min(size, 5) do out[#out + 1] = { kind = "unknown" } end
+	end
+	-- open spots: the ones set, else one per role wanted, then any
+	local spots = (type(l.spots) == "table" and #l.spots > 0) and l.spots or nil
+	if spots then
+		for _, sp in ipairs(spots) do if #out < 5 then out[#out + 1] = { kind = "open", role = sp.role, class = sp.class } end end
+	else
+		for _, b in ipairs(ROLES) do if has(l.need or 0, b) and #out < 5 then out[#out + 1] = { kind = "open", role = b } end end
+	end
+	while #out < 5 do out[#out + 1] = { kind = "any" } end
+	return out
+end
+
 local function setListingShown(row, on)
 	for _, r in ipairs({ row.bg, row.name, row.level, row.act, row.levels, row.size, row.note, row.shard, row.rolesLabel, row.age }) do r:SetShown(on) end
 	for _, t in ipairs(row.roles) do t:SetShown(on) end
-	if not on then for _, p in ipairs(row.plus or {}) do p:Hide() end end
+	if not on then for _, p in ipairs(row.plus or {}) do p:Hide() end for _, b in ipairs(row.badge or {}) do b:Hide() end end
 	if not on then row.class:Hide() row.sel:Hide() row.askCheck:Hide() row.hl:SetAlpha(0) else row.hl:SetAlpha(0.5) end
 	row.head:SetShown(not on)
 	row.headSign:Hide() row.headBar2:SetShown(false)
@@ -772,29 +813,43 @@ local function fillRow(row, d)
 		or r.where == "mine" and (GREY .. "Your server|r") or (GOLD .. OpenGroup_Nearby.whereText(l.shard) .. "|r")) .. (l.unconfirmed and (GREY .. " ?|r") or "")
 		.. (r.gf and (GREY .. " GF|r") or ""))
 	if r.chatPost then row.shard:SetText(GOLD .. "LFG " .. l.shard .. "|r") end
-	-- Roles: groups show what they still need (one icon per open spot, the class where one is set,
-	-- each with a green +); solo players the roles they play (plain icons)
-	local icons = {}
-	local spots = (l.size > 1 and type(l.spots) == "table" and #l.spots > 0) and l.spots or nil
-	if spots then
-		for _, sp in ipairs(spots) do icons[#icons + 1] = { role = sp.role, class = sp.class } end
-	elseif not (summon or bgq) then
-		for _, b in ipairs(ROLES) do if has(l.need, b) then icons[#icons + 1] = { role = b } end end
-	end
+	-- Group: up to five slots. Members first (the leader, then the others: class icon with a role
+	-- badge, "?" where we don't know who), then the open spots (the role wanted, with a green +),
+	-- then any other free places (dim). A solo player: one slot and "solo". Raids: "12/40".
+	local slots = browse.slotsOf(l, r)
 	for k, t in ipairs(row.roles) do
-		local ic = icons[k]
-		if ic then
-			W.spotIcon(t, ic.role, ic.class)
-			t:SetAlpha((not spots and d.match and not has(L.mine and L.mine.need or 0, ic.role)) and 0.3 or 1)
+		local sl = slots[k]
+		local badge, plus = row.badge[k], row.plus[k]
+		badge:Hide() plus:Hide()
+		if sl then
+			t:SetTexCoord(0, 1, 0, 1) t:SetDesaturated(false) t:SetVertexColor(1, 1, 1) t:SetAlpha(1)
+			if sl.kind == "member" then
+				if not (sl.class and W.setClassIcon(t, sl.class)) then t:SetTexture(QUESTION_ICON) end
+				if (sl.role or 0) > 0 and W.ROLE_ATLAS[sl.role] then badge:SetAtlas(W.ROLE_ATLAS[sl.role]) badge:Show() end
+			elseif sl.kind == "unknown" then
+				t:SetTexture(QUESTION_ICON) t:SetAlpha(0.6)
+			elseif sl.kind == "open" then
+				W.spotIcon(t, sl.role, sl.class)
+				t:SetAlpha((d.match and (sl.role or 0) > 0 and not has(L.mine and L.mine.need or 0, sl.role)) and 0.3 or 0.85)
+				plus:Show()
+			else
+				t:SetColorTexture(0.3, 0.25, 0.18, 0.5)
+			end
 			t:Show()
-			row.plus[k]:SetShown(r.kind == "group")
 		else
 			t:Hide()
-			row.plus[k]:Hide()
 		end
 	end
+	row.size:SetText("")
 	if summon or bgq then
 		row.rolesLabel:SetText(("|T%s:16|t"):format(summon and SUMMON_ICON or BGQ_ICON))
+		row.rolesLabel:Show()
+	elseif slots.text then
+		-- after the slots in use ("solo"), or alone ("12/40")
+		local n = #slots
+		row.rolesLabel:ClearAllPoints()
+		if n > 0 then row.rolesLabel:SetPoint("LEFT", row.roles[n], "RIGHT", 6, 0) else row.rolesLabel:SetPoint("LEFT", row.roles[1], "LEFT", 0, 0) end
+		row.rolesLabel:SetText(GREY .. slots.text .. "|r")
 		row.rolesLabel:Show()
 	else
 		row.rolesLabel:Hide()

@@ -539,6 +539,31 @@ local function actsParse(s)
 end
 
 -- l = { leader, seq, shard, level, size, age, hops, class, need, cat, acts, title, note }
+-- Who's in a group (0.6.3 on): class and role per member, the leader first, at most 5.
+-- "Wa1,Pr2,Ma4" (class code, role bits: 1 tank, 2 healer, 4 damage, 0 not set).
+P.CLASS_CODE = { WARRIOR = "Wa", PALADIN = "Pa", HUNTER = "Hu", ROGUE = "Ro", PRIEST = "Pr", SHAMAN = "Sh",
+	MAGE = "Ma", WARLOCK = "Wl", DRUID = "Dr", DEATHKNIGHT = "Dk" }
+P.CODE_CLASS = {}
+for k, v in pairs(P.CLASS_CODE) do P.CODE_CLASS[v] = k end
+function P.membersText(list)
+	local out = {}
+	for _, m in ipairs(type(list) == "table" and list or {}) do
+		if #out >= 5 then break end
+		local code = P.CLASS_CODE[m.class or ""] or "?"
+		out[#out + 1] = code .. (int(m.role, 0, 7) or 0)
+	end
+	return table.concat(out, ",")
+end
+function P.membersParse(s)
+	local out = {}
+	for e in (s or ""):gmatch("[^,]+") do
+		local code, role = e:match("^(%?)(%d)$")
+		if not code then code, role = e:match("^(%a%a)(%d)$") end
+		if code and #out < 5 then out[#out + 1] = { class = P.CODE_CLASS[code], role = int(role, 0, 7) or 0 } end
+	end
+	return #out > 0 and out or nil
+end
+
 function P.listing(l)
 	local msg = ("L1;%s;%d;%d;%d;%d;%d;%d;%s;%d;%d;%s;%d;%d;%s;%s"):format(
 		clean(l.leader, P.NAME_LEN), l.seq or 0, l.shard or 0, l.level or 0, l.size or 1,
@@ -547,7 +572,9 @@ function P.listing(l)
 		int(l.quest, 0, 10000000) or 0, clean(l.title, P.TITLE_LEN), clean(l.note, P.NOTE_LEN))
 	-- the spots go last; if it's too long the note gives way, not the spots
 	local spots = P.spotsText(l.spots)
-	local tail = spots ~= "" and (";" .. spots) or ""
+	local members = P.membersText(l.members)
+	-- (members after the spots field, which is then sent even when empty)
+	local tail = (spots ~= "" or members ~= "") and (";" .. spots .. (members ~= "" and (";" .. members) or "")) or ""
 	if #msg + #tail > P.MAX_LEN then msg = msg:sub(1, P.MAX_LEN - #tail) end
 	return msg .. tail
 end
@@ -587,7 +614,7 @@ function P.parse(msg)
 			hops = int(f[8], 0, 10), class = clean(f[9], 12):upper():gsub("[^A-Z]", ""), need = int(f[10], 0, 7),
 			cat = int(f[11], 0, 99999), acts = actsParse(f[12]), price = int(f[13], 0, P.MAX_PRICE),
 			quest = int(f[14], 0, 10000000), title = clean(f[15], P.TITLE_LEN), note = clean(f[16], P.NOTE_LEN),
-			spots = P.spotsParse(f[17]),
+			spots = P.spotsParse(f[17]), members = P.membersParse(f[18]),
 		}
 		if not l.price or not l.quest then return nil end
 		if l.quest > 0 and l.title == "" then return nil end

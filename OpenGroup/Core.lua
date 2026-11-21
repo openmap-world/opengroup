@@ -508,12 +508,28 @@ end
 
 -- age on the wire is "seconds since the leader last sent this", not since it was first listed:
 -- a listing older than five minutes used to be rejected everywhere even while its leader was on.
+-- who's in our party, for the listing: class and role (the game's assigned role where set), the
+-- leader (us) first; nil solo or in a raid
+function L.partyMembers()
+	if (GetNumGroupMembers and GetNumGroupMembers() or 0) <= 1 or (IsInRaid and IsInRaid()) then return nil end
+	local ROLE = { TANK = 1, HEALER = 2, DAMAGER = 4 }
+	local out = {}
+	for _, u in ipairs({ "player", "party1", "party2", "party3", "party4" }) do
+		if u == "player" or (UnitExists and UnitExists(u)) then
+			local ok, _, cls = pcall(UnitClass, u)
+			local r = UnitGroupRolesAssigned and select(2, pcall(UnitGroupRolesAssigned, u))
+			if ok and type(cls) == "string" then out[#out + 1] = { class = cls, role = ROLE[r] or 0 } end
+		end
+	end
+	return #out > 1 and out or nil
+end
+
 function L.mineForSend()
 	local m = L.mine
 	return { leader = L.me(), seq = m.seq, shard = L.shard(), level = UnitLevel("player"),
 		size = math.max(1, GetNumGroupMembers()), age = 0, hops = 0,
 		class = select(2, UnitClass("player")) or "", need = m.need or 0, cat = m.cat or 0, acts = m.acts or {}, price = m.price or 0, quest = m.quest or 0,
-		title = m.title, note = m.note, spots = m.spots }
+		title = m.title, note = m.note, spots = m.spots, members = L.partyMembers() }
 end
 
 local announceAt = 1
@@ -850,7 +866,7 @@ local function hasBit(bits, b) return (bits or 0) % (b * 2) >= b end
 function L.rowOf(l, myShard, prefer)
 	local A, Q = OpenGroup_Activities, OpenGroup_Quests
 	local r = { l = l, leader = l.leader or "?", class = l.class, level = l.level or 0, size = l.size or 1,
-		need = l.need or 0, spots = l.spots, note = l.note or "", got = l.got or 0, shard = l.shard or 0, cat = l.cat or 0 }
+		need = l.need or 0, spots = l.spots, members = l.members, note = l.note or "", got = l.got or 0, shard = l.shard or 0, cat = l.cat or 0 }
 	r.where = l.src == "finder" and "finder" or l.src == "chat" and "chat" or (l.shard == myShard and "mine" or "other")
 	-- another shard's Group Finder group or LFG post, passed on by an OpenGroup player there
 	r.remote = l.src == "remote" or l.src == "remotechat"
@@ -1049,9 +1065,9 @@ end
 -- what's left; when that gets too small, Leader and Where shrink, then the least useful columns go
 -- (Size, then Age, then Where).
 L.COLUMNS = {
-	{ key = "cls", w = 16 }, { key = "lvl", w = 22 }, { key = "leader", w = 112, min = 86 }, { key = "act", flex = true, min = 96 },
-	{ key = "levels", w = 50 }, { key = "size", w = 30, drop = 1 }, { key = "needs", w = 74 },
-	{ key = "where", w = 82, min = 66, drop = 3 }, { key = "age", w = 30, drop = 2 },
+	{ key = "cls", w = 16 }, { key = "lvl", w = 22 }, { key = "leader", w = 112, min = 80 }, { key = "act", flex = true, min = 96 },
+	{ key = "levels", w = 50, drop = 2 }, { key = "needs", w = 98 },
+	{ key = "where", w = 82, min = 66, drop = 3 }, { key = "age", w = 30, drop = 1 },
 }
 L.COL_GAP = 6
 function L.columns(width)

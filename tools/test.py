@@ -57,6 +57,9 @@ local bq = P.listing{leader="Pvp P", seq=1, shard=61, level=60, size=1, age=0, h
 local kb, lb = P.parse(bq)
 local gk, gl = P.parse(P.groupListing{leader="Lead L", seq=2, shard=47, level=55, size=3, age=0, hops=0, class="PRIEST", need=4, cat=2, acts={30}, title="", note="x", spots={ P.spot(4) }})
 check("group listing roundtrip", gk == "G1" and gl.leader == "Lead L" and gl.acts[1] == 30 and #gl.spots == 1)
+local mk, ml = P.parse(P.listing{leader="Lead L", seq=2, shard=47, level=55, size=3, age=0, hops=0, class="PRIEST", need=4, cat=2, acts={30}, title="", note="x", members={ {class="PRIEST", role=2}, {class="WARRIOR", role=1}, {class="MAGE", role=0} }})
+check("members travel with a listing", mk == "L1" and ml.members and #ml.members == 3 and ml.members[2].class == "WARRIOR" and ml.members[2].role == 1 and ml.spots and #ml.spots == 0)
+check("no members: nothing extra", select(2, P.parse(P.listing{leader="Solo S", seq=1, shard=47, level=55, size=1, age=0, hops=0, class="MAGE", need=4, cat=2, acts={30}, title="", note=""})).members == nil)
 check("group unlisted and ask", P.parse(P.groupUnlisted(5)) == "G0" and select(2, P.parse(P.groupUnlisted(5))).seq == 5 and P.parse(P.groupAsk()) == "GQ")
 -- other shards' Group Finder digests: spaced names, split into parts under the limit, all back
 local many = {}
@@ -391,7 +394,7 @@ local m = L.migrateBrowse({})
 check("migrate defaults", m.where == "all" and m.groupBy == "act" and m.otherOnly == nil)
 check("migrate keeps a choice", L.migrateBrowse({ where = "finder", otherOnly = true }).where == "finder")
 local narrow, wide = L.columns(380), L.columns(1000)
-check("narrow: activity still readable, extras dropped", narrow.at.act.w >= 96 and narrow.hidden.size and narrow.at.leader and narrow.at.needs)
+check("narrow: activity still readable, extras dropped", narrow.at.act.w >= 96 and narrow.hidden.age and narrow.at.leader and narrow.at.needs)
 check("wide: every column, activity takes the rest", not next(wide.hidden) and wide.at.act.w > 400)
 local last = wide.order[#wide.order]
 check("wide: columns fill the width", math.abs(last.x + last.w - 1000) < 1)
