@@ -469,10 +469,15 @@ qcard.list = CreateFrame("Button", nil, qcard, "UIPanelButtonTemplate")
 qcard.list:SetSize(130, 22)
 qcard.list:SetPoint("BOTTOMRIGHT", -10, 8)
 qcard.list:SetText("List me for it")
+-- a quest just accepted, offered: show the groups for it only when asked
+qcard.show = CreateFrame("Button", nil, qcard, "UIPanelButtonTemplate")
+qcard.show:SetSize(150, 22)
+qcard.show:SetPoint("RIGHT", qcard.list, "LEFT", -6, 0)
+qcard.show:SetText("Show groups for it")
 qcard.count = qcard:CreateFontString(nil, "ARTWORK", "GameFontNormal")
 qcard.count:SetPoint("BOTTOMRIGHT", qcard.list, "TOPRIGHT", 0, 6)
 qcard.title:SetPoint("RIGHT", qcard.close, "LEFT", -6, 0)
-qcard.objs:SetPoint("RIGHT", qcard.list, "LEFT", -10, 0)
+qcard.objs:SetPoint("RIGHT", qcard.show, "LEFT", -10, 0)
 qcard:Hide()
 local bar = CreateFrame("EventFrame", nil, browse.content, "MinimalScrollBar")
 bar:SetPoint("TOPLEFT", box, "TOPRIGHT", 6, 0)
@@ -1142,8 +1147,9 @@ function browse.refresh()
 		or l and l.cat == P.SUMMON_CAT and (asked[l.leader] and "Ask Again" or "Request Summon")
 		or l and l.size <= 1 and "Group Invite" or (l and asked[l.leader] and "Ask Again" or "Ask to Join"))
 	chip:Hide()
-	qcard:SetShown(questFilter ~= nil)
-	local top = questFilter and -92 or -4
+	local promptQ = not questFilter and browse.questPrompt or nil
+	qcard:SetShown(questFilter ~= nil or promptQ ~= nil)
+	local top = (questFilter or promptQ) and -92 or -4
 	browse.colHead:ClearAllPoints()
 	browse.colHead:SetPoint("TOPLEFT", 6, top)
 	browse.colHead:SetPoint("RIGHT", box, "RIGHT", 0, 0)
@@ -1151,11 +1157,12 @@ function browse.refresh()
 	box:SetPoint("TOPLEFT", 6, top - 20)
 	box:SetPoint("BOTTOMRIGHT", -24, 6)
 	browse.layoutColumns(browse.cols)
-	if questFilter then
-		local q = questFilter
-		local c = GetQuestDifficultyColor and GetQuestDifficultyColor(q.level or 0)
+	if questFilter or promptQ then
+		local q = questFilter or promptQ
+		local qlvl = ((q.level or 0) > 0 and q.level) or Q.level(q.id) or 0
+		local c = qlvl > 0 and GetQuestDifficultyColor and GetQuestDifficultyColor(qlvl)
 		local hex = c and ("|cff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255) or GOLD
-		qcard.title:SetText(("%s[%d] %s|r"):format(hex, q.level or 0, q.title))
+		qcard.title:SetText(hex .. (qlvl > 0 and ("[" .. qlvl .. "] ") or "") .. q.title .. "|r")
 		local lines = {}
 		for i, o in ipairs(Q.objectives(q.id)) do
 			if i > 3 then break end
@@ -1164,7 +1171,15 @@ function browse.refresh()
 		if #lines == 0 then lines[1] = GREY .. (Q.onLog(q.id) and "On your quest log" or "Not on your quest log") .. "|r" end
 		qcard.objs:SetText(table.concat(lines, "\n"))
 		local onIt = shown
-		qcard.count:SetText(onIt == 0 and (GREY .. "Nobody listed yet|r") or (GREEN .. onIt .. (onIt == 1 and " player" or " players") .. " on it|r"))
+		if promptQ then
+			-- offered, not filtering: count who's listed for it anywhere
+			onIt = 0
+			for _, src in ipairs({ L.listings, L.nearby, L.remote or {} }) do
+				for _, l in pairs(src) do if l.quest == q.id then onIt = onIt + 1 end end
+			end
+		end
+		qcard.count:SetText(onIt == 0 and (GREY .. "Nobody listed yet|r") or (GREEN .. onIt .. (onIt == 1 and " player" or " players") .. " on this quest|r"))
+		qcard.show:SetShown(promptQ ~= nil)
 		qcard.list:SetEnabled(not (L.mine and L.mine.quest == q.id))
 		qcard.list:SetText(L.mine and L.mine.quest == q.id and "You're listed" or "List me for it")
 	end
@@ -2436,6 +2451,8 @@ do
 			"Players you mouse over or walk past get a quiet, hidden hello (one every 2 seconds, each at most once a session), so OpenGroup finds the users around you. Nobody sees anything." },
 		{ "Search the Group Finder in all languages", function() return Nb.allLanguages() end, function(v) db().langAll = v and true or false end,
 			"The game's search only shows your own language unless asked for more. Pick single languages in Browse's Filter menu." },
+		{ "Ask about new quests", function() return on("questPrompt") end, set("questPrompt"),
+			"When you accept a quest people group for (elite, group or dungeon quests, or ones with something to kill), Browse offers to list you for it or show the groups for it. The list doesn't change until you ask." },
 		{ "Show Browse as cards", function() return browse.cardsOn and browse.cardsOn() end, function(v) if browse.setCards then browse.setCards(v) end end,
 			"Two groups per line, with each slot spelled out (Tank, need heal, open) and Ask to join and Whisper on the card. The Cards / Rows button next to Filter switches too." },
 	}
@@ -3076,8 +3093,16 @@ Q.onPick = function(q)
 	end
 	listForQuest(q)
 end
-qcard.list:SetScript("OnClick", function() if questFilter then listForQuest(questFilter) end end)
-qcard.close:SetScript("OnClick", function() questFilter = nil L.onChange() end)
+qcard.list:SetScript("OnClick", function() local q = questFilter or browse.questPrompt if q then browse.questPrompt = nil listForQuest(q) end end)
+qcard.close:SetScript("OnClick", function() questFilter = nil browse.questPrompt = nil L.onChange() end)
+qcard.show:SetScript("OnClick", function() local q = browse.questPrompt browse.questPrompt = nil if q then browse.setQuest(q) end end)
+-- a quest just accepted: offer it (the list stays as it is), if it's one people group for and the
+-- player hasn't turned the offer off
+Q.onAccept = function(q)
+	if db().questPrompt == false or not Q.worthGrouping(q.id) then return end
+	browse.questPrompt = q
+	L.onChange()
+end
 
 -- --------------------------------------------------------------------------------------------
 -- tabs, refresh, slash

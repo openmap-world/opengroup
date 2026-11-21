@@ -937,5 +937,27 @@ Bc.setCards(false)
 assert(OpenGroupDB.browseView == nil, "back to rows, remembered")
 OpenGroup.listings["Card C"] = nil
 print("cards ok")
+-- a quest just accepted: offered, the list doesn't change; shown only when asked
+local Qs = OpenGroup_Quests
+C_QuestLog.GetQuestObjectives = function(id) if id == 1234 then return { { text = "0/8 Winterfall Pathfinder", type = "monster", finished = false } } end return { { text = "0/1 Stone Circle", type = "event", finished = false } } end
+OpenGroupDB.tab = "browse" OpenGroupDB.questPrompt = nil
+OpenGroup_UI.browse.setQuest(nil)
+OpenGroup.listings["Any A"] = { leader = "Any A", seq = 1, shard = 55, level = 58, size = 3, hops = 0, class = "MAGE", need = 2, cat = 2, acts = {30}, price = 0, quest = 0, title = "", note = "", got = CLOCK }
+assert(Qs.worthGrouping(1234) and not Qs.worthGrouping(77), "kill quests are worth a group, talk/explore ones aren't")
+Qs.onAccept({ id = 77, title = "The Stone Circle", level = 0 })
+assert(OpenGroup_UI.browse.questPrompt == nil, "no offer for a talk/explore quest")
+Qs.onAccept({ id = 1234, title = "The Missing Diplomat", level = 0 })
+assert(OpenGroup_UI.browse.questPrompt and OpenGroup_UI.browse.questPrompt.id == 1234, "offered")
+SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+local seenAny = false
+for _, d in ipairs(PROVIDED) do if d.l and d.l.leader == "Any A" then seenAny = true end end
+assert(seenAny, "the list still shows groups for the usual filters")
+OpenGroupDB.questPrompt = false
+OpenGroup_UI.browse.questPrompt = nil
+Qs.onAccept({ id = 1234, title = "The Missing Diplomat", level = 0 })
+assert(OpenGroup_UI.browse.questPrompt == nil, "the setting turns the offer off")
+OpenGroupDB.questPrompt = nil
+OpenGroup.listings["Any A"] = nil
+print("quest offer ok")
 print("smoke OK")
 ''')
