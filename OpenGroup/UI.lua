@@ -1107,7 +1107,10 @@ function browse.refresh()
 		add(rows)
 	end
 	browse.cols = browse.cols or L.columns(440)
-	box:SetDataProvider(CreateDataProvider(items), ScrollBoxConstants.RetainScrollPosition)
+	-- rows or cards (the same items)
+	local cards = browse.cardsOn and browse.cardsOn() or false
+	if browse.showCards then browse.showCards(items, cards) end
+	if not cards then box:SetDataProvider(CreateDataProvider(items), ScrollBoxConstants.RetainScrollPosition) end
 
 	local peers = L.count(L.peers)
 	local shown = #rows + #matches
@@ -2433,6 +2436,8 @@ do
 			"Players you mouse over or walk past get a quiet, hidden hello (one every 2 seconds, each at most once a session), so OpenGroup finds the users around you. Nobody sees anything." },
 		{ "Search the Group Finder in all languages", function() return Nb.allLanguages() end, function(v) db().langAll = v and true or false end,
 			"The game's search only shows your own language unless asked for more. Pick single languages in Browse's Filter menu." },
+		{ "Show Browse as cards", function() return browse.cardsOn and browse.cardsOn() end, function(v) if browse.setCards then browse.setCards(v) end end,
+			"Two groups per line, with each slot spelled out (Tank, need heal, open) and Ask to join and Whisper on the card. The Cards / Rows button next to Filter switches too." },
 	}
 	local boxes = {}
 	for i, it in ipairs(items) do
@@ -3859,6 +3864,240 @@ end)()
 	btn:SetFrameLevel(net.settingsBar:GetFrameLevel() + 2)
 	btn:SetText("Report a problem")
 	btn:SetScript("OnClick", function() L.showReport() end)
+end)()
+
+-- --------------------------------------------------------------------------------------------
+-- Browse as cards: two per line, the same sections, sorting and filters as the rows. A card has the
+-- activity, its levels, where and how long ago on top; the leader; the five slots big, each with
+-- a word under it ("Tank", "need heal", "open"); the note; and Ask to join (Invite for a solo
+-- player) and Whisper. The list/cards button next to Filter switches; Settings has it too.
+
+;(function()
+	local CARD_H, GAP = 150, 8
+	local ROLE_WORD = { [1] = "Tank", [2] = "Heal", [4] = "DPS" }
+	function browse.cardsOn() return type(db()) == "table" and db().browseView == "cards" end
+	function browse.setCards(on)
+		db().browseView = on and "cards" or nil
+		if browse.viewBtn then browse.viewBtn:Paint() end
+		L.onChange()
+	end
+
+	-- the switch, next to Filter (the search box gives it room)
+	local vb = CreateFrame("Button", nil, browse.header, "UIPanelButtonTemplate")
+	vb:SetSize(60, 22)
+	vb:SetPoint("RIGHT", browse.filterBtn, "LEFT", -8, 0)
+	function vb:Paint() self:SetText(browse.cardsOn() and "Rows" or "Cards") end
+	vb:SetScript("OnShow", vb.Paint)
+	vb:SetScript("OnClick", function() browse.setCards(not browse.cardsOn()) end)
+	vb:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:SetText(browse.cardsOn() and "Show rows" or "Show cards")
+		GameTooltip:AddLine("Cards: two groups per line, with each slot spelled out and the buttons on the card.", 1, 1, 1, true)
+		GameTooltip:Show()
+	end)
+	vb:SetScript("OnLeave", GameTooltip_Hide)
+	vb:Paint()
+	browse.viewBtn = vb
+	if browse.searchBox then
+		browse.searchBox:ClearAllPoints()
+		browse.searchBox:SetPoint("LEFT", browse.header, "TOPLEFT", 8, -19)
+		browse.searchBox:SetPoint("RIGHT", vb, "LEFT", -10, 0)
+	end
+
+	local list = CreateFrame("Frame", nil, browse.content, "WowScrollBoxList")
+	list:SetPoint("TOPLEFT", box, "TOPLEFT")
+	list:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT")
+	local cbar = CreateFrame("EventFrame", nil, browse.content, "MinimalScrollBar")
+	cbar:SetPoint("TOPLEFT", list, "TOPRIGHT", 6, 0)
+	cbar:SetPoint("BOTTOMLEFT", list, "BOTTOMRIGHT", 6, 0)
+	list:Hide() cbar:Hide()
+
+	local function card(parent)
+		local c = CreateFrame("Button", nil, parent)
+		c.bg = c:CreateTexture(nil, "BACKGROUND")
+		c.bg:SetAllPoints()
+		c.bg:SetColorTexture(0.13, 0.1, 0.06, 0.92)
+		W.edge(c, 0.36, 0.29, 0.2, 1)
+		c.hl = c:CreateTexture(nil, "HIGHLIGHT")
+		c.hl:SetAllPoints()
+		c.hl:SetColorTexture(1, 0.9, 0.6, 0.06)
+		local function fs(font) local f = c:CreateFontString(nil, "ARTWORK", font) f:SetJustifyH("LEFT") f:SetWordWrap(false) return f end
+		c.act = fs("GameFontNormal")
+		c.act:SetPoint("TOPLEFT", 10, -9)
+		c.meta = fs("GameFontDisableSmall")
+		c.meta:SetJustifyH("RIGHT")
+		c.meta:SetPoint("TOPRIGHT", -10, -10)
+		c.act:SetPoint("RIGHT", c.meta, "LEFT", -6, 0)
+		c.cls = c:CreateTexture(nil, "ARTWORK")
+		c.cls:SetSize(14, 14)
+		c.cls:SetPoint("TOPLEFT", 10, -30)
+		c.who = fs("GameFontHighlightSmall")
+		c.who:SetPoint("LEFT", c.cls, "RIGHT", 5, 0)
+		c.who:SetPoint("RIGHT", c, "RIGHT", -10, 0)
+		c.slots, c.words, c.badges, c.plus = {}, {}, {}, {}
+		for i = 1, 5 do
+			local t = c:CreateTexture(nil, "ARTWORK")
+			t:SetSize(26, 26)
+			t:SetPoint("TOPLEFT", 12 + (i - 1) * 46, -52)
+			local b = c:CreateTexture(nil, "OVERLAY")
+			b:SetSize(12, 12)
+			b:SetPoint("CENTER", t, "BOTTOMRIGHT", -1, 1)
+			local p = c:CreateFontString(nil, "OVERLAY", "GameFontGreen")
+			p:SetPoint("CENTER", t, "BOTTOMRIGHT", -1, 2)
+			p:SetText("+")
+			local w = c:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+			w:SetPoint("TOP", t, "BOTTOM", 0, -3)
+			w:SetWidth(46)
+			w:SetWordWrap(false)
+			c.slots[i], c.badges[i], c.plus[i], c.words[i] = t, b, p, w
+		end
+		c.extra = fs("GameFontDisableSmall")
+		c.extra:SetPoint("LEFT", c.slots[1], "RIGHT", 8, 0)
+		c.note = fs("GameFontNormalSmall")
+		c.note:SetTextColor(0.25, 1, 0.25)
+		c.note:SetPoint("TOPLEFT", 10, -100)
+		c.note:SetPoint("RIGHT", c, "RIGHT", -10, 0)
+		c.ask = CreateFrame("Button", nil, c, "UIPanelButtonTemplate")
+		c.ask:SetSize(100, 20)
+		c.ask:SetPoint("BOTTOMLEFT", 8, 8)
+		c.tell = CreateFrame("Button", nil, c, "UIPanelButtonTemplate")
+		c.tell:SetSize(80, 20)
+		c.tell:SetPoint("LEFT", c.ask, "RIGHT", 6, 0)
+		c.tell:SetText("Whisper")
+		c.mark = c:CreateTexture(nil, "OVERLAY")
+		c.mark:SetPoint("TOPLEFT", 1, -1) c.mark:SetPoint("BOTTOMRIGHT", -1, 1)
+		c.mark:SetColorTexture(1, 0.82, 0.2, 0.08)
+		c:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+		c:SetScript("OnClick", function(self, button)
+			local d = self.d
+			if not d then return end
+			selected = d.l.leader
+			if button == "RightButton" then L.onChange() browse.personMenu(self, d.l.leader, d.l) return end
+			W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON")
+			L.onChange()
+		end)
+		c:SetScript("OnDoubleClick", function(self) if self.d then selected = self.d.l.leader browse.primary() end end)
+		c.ask:SetScript("OnClick", function(self) local d = self:GetParent().d if d then selected = d.l.leader browse.primary() end end)
+		c.tell:SetScript("OnClick", function(self) local d = self:GetParent().d if d and browse.openWhisper then browse.openWhisper(d.l.leader) end end)
+		c:SetScript("OnEnter", function(self)
+			local d = self.d
+			if not d then return end
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:AddLine(listingTitle(d.l), 1, 1, 1, true)
+			for _, sl in ipairs(self.slotList or {}) do
+				if sl.kind == "member" then GameTooltip:AddLine((W.className(sl.class) or "?") .. ((sl.role or 0) > 0 and (", " .. W.ROLE_NAME[sl.role]) or ""), .9, .9, .9)
+				elseif sl.kind == "open" then GameTooltip:AddLine("Looking for: " .. W.ROLE_NAME[sl.role or 0], .25, 1, .25)
+				elseif sl.kind == "unknown" then GameTooltip:AddLine("Someone in the group", .6, .6, .6) end
+			end
+			GameTooltip:AddLine("Click to select, double-click to ask. Right-click for more.", 0, 1, 0, true)
+			GameTooltip:Show()
+		end)
+		c:SetScript("OnLeave", GameTooltip_Hide)
+		return c
+	end
+
+	local function paint(c, d)
+		c.d = d
+		local l, r = d.l, d.r
+		local lvl = UnitLevel("player")
+		local hex = r.act and A.levelColor(r.act, lvl) or WHITE
+		local title = (r.act and (A.name(r.act) or "?")) or listingTitle(l)
+		c.act:SetText(hex .. title .. "|r" .. ((r.min or 0) > 0 and ("  " .. hex .. (r.min == r.max and r.min or (r.min .. "-" .. r.max)) .. "|r") or ""))
+		local where = (r.where == "finder" and "Group Finder") or (r.where == "chat" and (l.chan or "LFG chat"))
+			or (r.chatPost and ("LFG " .. l.shard)) or (L.CHAN .. " " .. (l.shard or "?"))
+		c.meta:SetText(where .. "  " .. ago(time() - (l.got or time())))
+		if not W.setClassIcon(c.cls, l.class) then c.cls:SetTexture(QUESTION_ICON) end
+		c.who:SetText(W.classColor(l.class) .. L.short(l.leader) .. "|r" .. ((l.level or 0) > 0 and (GREY .. "  " .. l.level .. "|r") or ""))
+		local slots = browse.slotsOf(l, r)
+		c.slotList = slots
+		for i = 1, 5 do
+			local t, b, p, w, sl = c.slots[i], c.badges[i], c.plus[i], c.words[i], slots[i]
+			b:Hide() p:Hide()
+			if sl then
+				t:SetTexCoord(0, 1, 0, 1) t:SetDesaturated(false) t:SetVertexColor(1, 1, 1) t:SetAlpha(1)
+				if sl.kind == "member" then
+					if not (sl.class and W.setClassIcon(t, sl.class)) then t:SetTexture(QUESTION_ICON) end
+					if (sl.role or 0) > 0 and W.ROLE_ATLAS[sl.role] then b:SetAtlas(W.ROLE_ATLAS[sl.role]) b:Show() end
+					w:SetText(ROLE_WORD[sl.role or 0] or (sl.class and W.className(sl.class)) or "")
+				elseif sl.kind == "unknown" then
+					t:SetTexture(QUESTION_ICON) t:SetAlpha(0.6) w:SetText(GREY .. "member|r")
+				elseif sl.kind == "open" then
+					W.spotIcon(t, sl.role, sl.class) t:SetAlpha(0.85) p:Show()
+					w:SetText(GREEN .. "need " .. ((ROLE_WORD[sl.role or 0] or "any"):lower()) .. "|r")
+				else
+					t:SetColorTexture(0.3, 0.25, 0.18, 0.5) w:SetText(GREY .. "open|r")
+				end
+				t:Show() w:Show()
+			else
+				t:Hide() w:Hide()
+			end
+		end
+		c.extra:SetText(slots.text and (GREY .. slots.text .. "|r") or "")
+		c.extra:ClearAllPoints()
+		if #slots > 0 then c.extra:SetPoint("LEFT", c.slots[#slots], "RIGHT", 8, 0) else c.extra:SetPoint("LEFT", c.slots[1], "LEFT", 0, 0) end
+		c.note:SetText(l.note or "")
+		local summon, bgq = r.kind == "summon", r.kind == "bgq"
+		c.ask:SetText(summon and "Request summon" or bgq and "Ask" or r.kind == "player" and "Invite" or "Ask to join")
+		c.ask:SetShown(not L.isMe(l.leader))
+		c.mark:SetShown(selected == l.leader)
+		c.bg:SetColorTexture(d.match and 0.1 or 0.13, d.match and 0.16 or 0.1, d.match and 0.07 or 0.06, 0.92)
+	end
+
+	local view = CreateScrollBoxListLinearView()
+	view:SetElementExtentCalculator(function(_, e) return e.header and 30 or (CARD_H + GAP) end)
+	view:SetElementInitializer("Frame", function(line, e)
+		if not line.built then
+			line.head = line:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+			line.head:SetPoint("LEFT", 10, 0)
+			line.headHit = CreateFrame("Button", nil, line)
+			line.headHit:SetAllPoints()
+			line.headHit:SetScript("OnClick", function(self)
+				local k = self:GetParent().headKey
+				if k then collapsed[k] = not collapsed[k] W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON") L.onChange() end
+			end)
+			line.cards = { card(line), card(line) }
+			line.built = true
+		end
+		line.headKey = e.header
+		line.head:SetShown(e.header ~= nil)
+		line.headHit:SetShown(e.header ~= nil)
+		if e.header then
+			line.head:SetText(e.text .. "  " .. GREY .. "(" .. e.count .. ")|r")
+			for _, c in ipairs(line.cards) do c:Hide() end
+			return
+		end
+		local w = math.max(200, (line:GetWidth() or 600) - GAP) / 2
+		for k, c in ipairs(line.cards) do
+			local d = e.pair[k]
+			c:ClearAllPoints()
+			c:SetPoint("TOPLEFT", (k - 1) * (w + GAP), 0)
+			c:SetSize(w, CARD_H)
+			if d then paint(c, d) c:Show() else c:Hide() end
+		end
+	end)
+	ScrollUtil.InitScrollBoxListWithScrollBar(list, cbar, view)
+
+	-- the rows' items -> lines of up to two cards (a header has a line of its own)
+	function browse.cardLines(items)
+		local out, pend = {}, nil
+		for _, it in ipairs(items) do
+			if it.header then
+				if pend then out[#out + 1] = { pair = pend } pend = nil end
+				out[#out + 1] = it
+			else
+				if pend then pend[2] = it out[#out + 1] = { pair = pend } pend = nil else pend = { it } end
+			end
+		end
+		if pend then out[#out + 1] = { pair = pend } end
+		return out
+	end
+	function browse.showCards(items, on)
+		list:SetShown(on) cbar:SetShown(on)
+		box:SetShown(not on) bar:SetShown(not on)
+		if on then list:SetDataProvider(CreateDataProvider(browse.cardLines(items)), ScrollBoxConstants.RetainScrollPosition) end
+	end
+	browse.cardPaint = paint
+	browse.newCard = card
 end)()
 
 local sideTabs = {}

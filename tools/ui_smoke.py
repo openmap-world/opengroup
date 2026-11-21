@@ -488,7 +488,7 @@ OpenGroup.whisperEvent(nil, "CHAT_MSG_WHISPER_INFORM", typed, "Who 4")
 assert(F.asked["Who 4"] and F.nextTarget().fullName == "Who 5", "asked once it went out; next moves on")
 date = date or function() return "12:00" end
 local frow = CreateFrame("Button") frow.built = false
-INITS[#INITS - 1](frow, F.results[4])
+INITS[#INITS - 2](frow, F.results[4])
 print("find row badge:", frow.badge:GetText())
 ChatFrame_SendTell = nil ChatEdit_GetActiveWindow = nil
 -- servers: a Trade number whose Group Finder we nearly all had is our server
@@ -870,7 +870,7 @@ OpenGroupDB.chatShowTrade = false
 assert(#OpenGroup_UI.chat.rows() == 1 and OpenGroup_UI.chat.rows()[1].kind == "l", "the Trade filter")
 OpenGroupDB.chatShowTrade = nil
 local crow = CreateFrame("Button") crow.built = false
-INITS[#INITS](crow, chatRows[1])
+INITS[#INITS - 1](crow, chatRows[1])
 crow.scripts.OnEnter(crow)
 GetChannelList = function() return 1, "Trade 47", false end
 print("world chat ok")
@@ -913,5 +913,29 @@ assert(kinds(Bs.slotsOf({ size = 1, need = 6, class = "DRUID" }, { kind = "playe
 print("raid:", kinds(Bs.slotsOf({ size = 12, need = 2 }, { kind = "group" }))) assert(kinds(Bs.slotsOf({ size = 12, need = 2 }, { kind = "group" })) == "|12/20", "a raid: a count")
 assert(kinds(Bs.slotsOf({ size = 2, need = 1, class = "ROGUE" }, { kind = "group" })) == "member,unknown,open1,any,any", "a chat post: the poster, ? for the rest")
 print("group slots ok")
+-- cards: the same items, two to a line, headers on their own
+local Bc = OpenGroup_UI.browse
+local cl = Bc.cardLines({ { header = "h1", text = "A", count = 3 }, { l = 1 }, { l = 2 }, { l = 3 }, { header = "h2", text = "B", count = 1 }, { l = 4 } })
+assert(#cl == 5 and cl[1].header and #cl[2].pair == 2 and #cl[3].pair == 1 and cl[4].header and #cl[5].pair == 1, "two cards a line, a header alone")
+OpenGroup.listings["Card C"] = { leader = "Card C", seq = 1, shard = 55, level = 58, size = 3, hops = 0, class = "PRIEST", need = 2, cat = 2, acts = {30}, price = 0, quest = 0, title = "", note = "lava run", got = CLOCK,
+  members = { { class = "PRIEST", role = 2 }, { class = "WARRIOR", role = 1 }, { class = "MAGE", role = 4 } } }
+OpenGroupDB.tab = "browse" OpenGroupDB.allLevels = true OpenGroupDB.where = "all"
+Bc.setCards(true)
+SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+local lineWithCard
+for _, e in ipairs(PROVIDED) do if e.pair then for _, d in ipairs(e.pair) do if d.l and d.l.leader == "Card C" then lineWithCard = e end end end end
+assert(lineWithCard, "the cards view lists the groups in pairs")
+local line = CreateFrame("Frame") line.built = false
+INITS[#INITS](line, lineWithCard)
+for _, c in ipairs(line.cards) do if c.d and c.d.l.leader == "Card C" then
+  c.scripts.OnEnter(c)
+  assert(c.words[1].text == "Heal" and c.words[2].text == "Tank" and c.words[4].text:find("need heal", 1, true) and c.ask.text == "Ask to join", "slots spelled out, Ask to join")
+end end
+local hline = CreateFrame("Frame") hline.built = false
+INITS[#INITS](hline, { header = "x", text = "Blackrock Depths", count = 2 })
+Bc.setCards(false)
+assert(OpenGroupDB.browseView == nil, "back to rows, remembered")
+OpenGroup.listings["Card C"] = nil
+print("cards ok")
 print("smoke OK")
 ''')
