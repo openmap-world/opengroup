@@ -749,21 +749,23 @@ assert(Nw.inTrade(), "in Trade (a city)")
 local sends = {}
 local saveSend4 = OpenGroup.send
 OpenGroup.send = function(to, m, ...) sends[#sends + 1] = { to = to, m = m } end
+Nw.feedReport() Nw.feedFlush() sends = {} Nw.feedTokensReset()
 Nw.onChat(linked, "Sel S", "2. Trade 47", "Trade 47", nil)
 Nw.onChat("lol", "Chat C", "2. Trade 47", "Trade 47", nil)
 Nw.onChat("LFM BRD need heals", "Lead L", "4. LookingForGroup 47", "LookingForGroup 47", nil)
 assert(Nw.feedReport(), "the reporter sends")
+-- the tree root is the 0.6.3 user whose name sorts first: Abe. Our lines go there and come back down
+Nw.feedFlush()
 local function linesTo(name)
   local ps = {}
   for _, x in ipairs(sends) do if x.to == name and x.m:sub(1, 2) == "T1" then local _, d = Pw.parse(x.m) ps[d.part] = d.piece end end
   if not ps[1] then return nil end
   return Pw.feedUnpack(table.concat(ps))
 end
-local toAbe, toHome = linesTo("Abe A"), linesTo("Hom H")
-print("World chat roots get:", toAbe and #toAbe, "| home (out of the city):", toHome and #toHome)
-assert(toAbe and #toAbe == 2 and toAbe[1].kind == "l" and toAbe[2].text:find("{i12360}", 1, true), "LFG first, then Trade with item IDs; chatter left out")
-assert(linesTo("Bea B") and linesTo("Dot D") and not linesTo("Cid C") and not linesTo("Old O"), "two roots per number (few numbers), only 0.6.3 users")
-assert(toHome and #toHome == 1 and toHome[1].kind == "t", "our own number gets the Trade lines (for players out of the city)")
+local toRoot = linesTo("Abe A")
+print("World chat root gets:", toRoot and #toRoot)
+assert(toRoot and #toRoot == 2 and toRoot[1].kind == "l" and toRoot[2].text:find("{i12360}", 1, true), "LFG first, then Trade with item IDs; chatter left out")
+assert(not linesTo("Bea B") and not linesTo("Old O") and not linesTo("Hom H"), "only to the root")
 local claim
 for _, x in ipairs(sends) do if x.to == "Hom H" and x.m:sub(1, 2) == "R1" then claim = x.m end end
 assert(claim and claim:find(";ct$"), "we claim LFG and Trade on our number")
@@ -774,9 +776,9 @@ assert(not Nw.feedReport() and #sends == 0, "the same line within 10 minutes isn
 GetChannelList = function() return 4, "LookingForGroup 47", false end
 Nw.onChat("WTS [Thorium Bar] 1g", "Ore O", "2. Trade 47", "Trade 47", nil)
 sends = {}
-Nw.feedReport()
+Nw.feedReport() Nw.feedFlush()
 assert(not linesTo("Abe A"), "only a player in Trade reports Trade")
--- receiving on 55 as Ann A: in name order without the reporter (Abe, Ann, Bea, Cid, Eve, Fay) Ann is 2nd, so 5 and 6
+-- receiving on 55 as Ann A, for the names after ours: Bea, Cid, Eve, Fay, Rep split in two: Bea and Fay pass it on
 GetChannelList = function() return 1, "Trade 55", false end
 for n in pairs(OpenGroup.peers) do OpenGroup.peers[n] = nil end
 for _, n in ipairs({ "Abe A", "Bea B", "Cid C", "Eve E", "Fay F", "Rep R" }) do OpenGroup.peers[n] = { shard = 55, level = 60, seen = CLOCK, v = "0.6.3-test" } end
@@ -785,15 +787,23 @@ sends = {}
 for i = #Nw.feed, 1, -1 do Nw.feed[i] = nil end
 OpenGroup.nearby = {} OpenGroup.remote = {}
 Nw.resetFeedIndex()
-local inMsgs = Pw.feedPack("Rep R", 47, 777, { { leader = "Sel S", age = 3, kind = "t", chan = 47, text = "WTS {i12360} 4g" }, { leader = "Lfm L", age = 2, kind = "l", chan = 47, text = "LFM BRD need heals" } })
+local inMsgs = Pw.feedPack("Rep R", 47, 777, { { leader = "Sel S", age = 3, kind = "t", chan = 47, text = "WTS {i12360} 4g" }, { leader = "Lfm L", age = 2, kind = "l", chan = 47, text = "LFM BRD need heals" } }, "Ann A", nil)
 for _, m in ipairs(inMsgs) do OpenGroup.receive(m, "Rep R") end
+-- a second chat number's batch in the same round: passed on merged with the first
+for _, m in ipairs(Pw.feedPack("Far F", 61, 900, { { leader = "Sixty S", age = 1, kind = "t", chan = 61, text = "WTS {i12360} 3g" } }, "Ann A", nil)) do OpenGroup.receive(m, "Far F") end
+Nw.feedFlush()
+local merged = linesTo("Bea B")
+assert(merged and #merged == 3, "lines from two chat numbers go on as one batch")
 local fw = {}
 for _, x in ipairs(sends) do if x.m:sub(1, 2) == "T1" then fw[x.to] = true end end
-assert(#Nw.feed == 2 and fw["Eve E"] and fw["Fay F"] and select(2, Pw.parse(sends[1].m)).hop == 1, "kept, and passed down the tree one hop further")
+assert(#Nw.feed == 3 and fw["Bea B"] and fw["Fay F"] and not fw["Abe A"] and not fw["Cid C"], "kept, and passed down the tree to our two children")
+local _, d1 = Pw.parse((function() for _, x in ipairs(sends) do if x.to == "Bea B" then return x.m end end end)())
+assert(d1.lo == "Bea B" and d1.hi == "Fay F", "each child gets its half of the names")
 assert(OpenGroup.remote["Lfm L"] and OpenGroup.remote["Lfm L"].src == "remotechat", "its group posts still feed Browse")
 sends = {}
 for _, m in ipairs(inMsgs) do OpenGroup.receive(m, "Bea B") end
-assert(#sends == 0 and #Nw.feed == 2, "a message reaches us once")
+Nw.feedFlush()
+assert(#sends == 0 and #Nw.feed == 3, "a message reaches us once")
 C_FriendList.IsIgnored = function(n) return n == "Spam S" end
 for _, m in ipairs(Pw.feedPack("Rep R", 47, 778, { { leader = "Spam S", age = 1, kind = "t", chan = 47, text = "WTS stuff" } })) do OpenGroup.receive(m, "Rep R") end
 for _, e in ipairs(Nw.feed) do assert(e.leader ~= "Spam S", "ignored players' lines are dropped") end
@@ -806,7 +816,7 @@ sends = {}
 Nw.feedTokensReset()
 OpenGroup.receive(Pw.backlogAsk(100), "Abe A")
 local bl = linesTo("Abe A")
-assert(bl and #bl == 3, "the last hour, to the one who asked")
+assert(bl and #bl == 4, "the last hour, to the one who asked")
 for _, x in ipairs(sends) do assert(select(2, Pw.parse(x.m)).hop == Pw.FEED_HOPS, "a backlog isn't passed on") end
 sends = {}
 OpenGroup.receive(Pw.backlogAsk(100), "Bea B")
@@ -821,9 +831,9 @@ OpenGroup.send = saveSend4
 OpenGroupDB.tab = "chat" SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
 OpenGroup_UI.showPage("chat")
 local chatRows = OpenGroup_UI.chat.rows()
-assert(#chatRows == 3, "the lines in the World chat tab")
+assert(#chatRows == 4, "the lines in the World chat tab")
 OpenGroup_UI.chat.search = "arcanite"
-assert(#OpenGroup_UI.chat.rows() == 1, "search finds item names")
+assert(#OpenGroup_UI.chat.rows() == 2, "search finds item names")
 OpenGroup_UI.chat.search = "crusader"
 assert(#OpenGroup_UI.chat.rows() == 1, "and enchant names")
 OpenGroup_UI.chat.search = ""

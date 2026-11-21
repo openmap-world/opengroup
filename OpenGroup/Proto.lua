@@ -201,7 +201,7 @@ end
 
 -- World chat (0.6.3): a chat number's useful LookingForGroup and Trade lines, many to a batch,
 -- compressed and spread over as many messages as it takes. Older versions ignore T1.
---   T1;origin;chan;digest;part;parts;hop;<piece of the packed batch>
+--   T1;origin;chan;digest;part;parts;hop;lo;hi;<piece of the packed batch>
 -- The batch is its lines, name^age^kind^chan^text joined with ~ (kind l = LookingForGroup,
 -- t = Trade; links travel as {i<item>}, {e<enchant>}, {s<spell>}), LZ-compressed against a
 -- built-in dictionary of what trade chat says a lot, then written in 91 safe characters (no
@@ -352,7 +352,8 @@ end
 
 local function feedClean(s, len) return (clean(s, len):gsub("[~%^]", " ")) end
 -- a batch of lines -> its messages
-function P.feedPack(origin, chan, digest, entries)
+-- lo, hi: the names this copy is for (strictly between them; "" = open), see Nearby.lua
+function P.feedPack(origin, chan, digest, entries, lo, hi)
 	local list = {}
 	for _, it in ipairs(entries or {}) do
 		if #list >= P.FEED_MAX then break end
@@ -364,11 +365,12 @@ function P.feedPack(origin, chan, digest, entries)
 	if #list == 0 then return {} end
 	local packed = P.b91enc(P.lz(table.concat(list, "~")))
 	local head = ("T1;%s;%d;%d;"):format(clean(origin, P.NAME_LEN), int(chan, 0, 99999) or 0, int(digest, 0, 2^31) or 0)
-	local room = P.MAX_LEN - #head - 10
+	local range = ";" .. clean(lo or "", P.NAME_LEN) .. ";" .. clean(hi or "", P.NAME_LEN) .. ";"
+	local room = P.MAX_LEN - #head - #range - 10
 	local parts = math.ceil(#packed / room)
 	if parts > 99 then return {} end
 	local out = {}
-	for i = 1, parts do out[i] = head .. i .. ";" .. parts .. ";0;" .. packed:sub((i - 1) * room + 1, i * room) end
+	for i = 1, parts do out[i] = head .. i .. ";" .. parts .. ";0" .. range .. packed:sub((i - 1) * room + 1, i * room) end
 	return out
 end
 -- the whole packed batch -> its lines (nil if it doesn't unpack)
@@ -390,7 +392,7 @@ end
 -- the same message one hop further down the tree
 function P.feedHop(msg, hop)
 	local f = split(msg)
-	if f[1] ~= "T1" or #f < 8 then return nil end
+	if f[1] ~= "T1" or #f < 10 then return nil end
 	f[7] = tostring(int(hop, 0, 99) or 0)
 	return table.concat(f, ";")
 end
@@ -629,9 +631,11 @@ function P.parse(msg)
 	elseif kind == "T1" then
 		local origin, chan, digest = clean(f[2] or "", P.NAME_LEN), int(f[3], 0, 99999), int(f[4], 0, 2^31)
 		local part, parts, hop = int(f[5], 1, 99), int(f[6], 1, 99), int(f[7], 0, 99)
-		local piece = f[8] or ""
+		local piece = f[10] or ""
 		if origin == "" or not (chan and digest and part and parts and hop and part <= parts) or piece == "" or piece:find("[^!-}]") then return nil end
-		return kind, { origin = origin, chan = chan, digest = digest, part = part, parts = parts, hop = hop, piece = piece }
+		local lo, hi = clean(f[8] or "", P.NAME_LEN), clean(f[9] or "", P.NAME_LEN)
+		return kind, { origin = origin, chan = chan, digest = digest, part = part, parts = parts, hop = hop, piece = piece,
+			lo = lo ~= "" and lo or nil, hi = hi ~= "" and hi or nil }
 	elseif kind == "B1" then
 		return kind, { max = int(f[2], 1, 500) or 100 }
 	elseif kind == "R1" then

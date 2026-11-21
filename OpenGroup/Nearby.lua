@@ -968,13 +968,16 @@ end
 -- chatter, gold sellers, boosts or websites), links as IDs, the same author and text at most once
 -- per 10 minutes, many lines to a batch, compressed (Proto.lua, P.feedPack).
 --
--- Passing on: per other chat number, the batch goes to one or two OpenGroup users there (the
--- roots), who pass each message down a binary tree of the OpenGroup users on their number (in
--- name order, leaving out the reporter: user i forwards to users 2i+1 and 2i+2), so nobody sends
--- more than two copies. Trade lines also go down the reporter's own number, for players there who
--- are out in the world and not in Trade. Everyone keeps to a World chat budget of about 24
--- messages a minute (OpenGroup's whole send rate is about one a second), so listings and answers
--- are never held up; past it, the oldest Trade lines are left out.
+-- Passing on: every OpenGroup user who takes World chat, whatever their chat number, is in one
+-- relay tree, in name order: users 1 and 2 are the roots and user i passes on to users 2i+1 and
+-- 2i+2. Reporters send their lines (on the same 20-second beat everywhere) to the two roots. What
+-- arrives is kept, and the lines new to us are merged, from every chat number, into one
+-- compressed batch that goes on to our two children 3 seconds later. So passing on costs the
+-- same however many chat numbers there are: about one batch to each of two players per round.
+-- Everyone keeps to a World chat budget of about 24 messages a minute (OpenGroup's whole send
+-- rate is about one a second), so listings and answers are never held up; past it, the oldest
+-- Trade lines are left out. Trade lines reach players on the reporter's own number too, so
+-- players out in the world, not in Trade, see their city's Trade.
 --
 -- Keeping: lines are kept for 3 hours (at most 3000), saved between sessions, searchable by text
 -- and item name. On login, and when the World chat tab opens, one OpenGroup user is asked for the
@@ -1037,6 +1040,12 @@ function N.feedSpend(n)
 	return true
 end
 function N.feedTokensReset() feedTokens, feedTokensAt = FEED_BURST, nil end
+function N.feedTokensLeft()
+	local t = clock()
+	feedTokens = math.min(FEED_BURST, feedTokens + (t - (feedTokensAt or t)) * FEED_RATE)
+	feedTokensAt = t
+	return feedTokens
+end
 
 -- links -> {i<item>[:enchant:suffix]}, {e<enchant>}, {s<spell>}; colours and textures dropped
 function N.packLinks(text)
@@ -1103,7 +1112,7 @@ local function addLine(e)
 	if x then
 		if e.got > x.got then x.got = e.got end
 		x.relay = x.relay or e.relay
-		return x
+		return x, false
 	end
 	N.feed[#N.feed + 1] = e
 	feedIndex[e.key] = e
@@ -1112,9 +1121,10 @@ local function addLine(e)
 	for id in e.text:gmatch("{i(%d+)") do
 		if GetItemInfo and not GetItemInfo(tonumber(id)) and C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, tonumber(id)) end
 	end
-	return e
+	return e, true
 end
 N.addFeedLine = addLine
+function N.hasLine(key) return feedIndex[key] ~= nil end
 function N.resetFeedIndex() feedIndex = {} for _, e in ipairs(N.feed) do feedIndex[e.key] = e end end
 
 -- a line from our own LookingForGroup / Trade (called from N.onChat)
@@ -1146,93 +1156,167 @@ local function feedPeers(n, skip)
 end
 N.feedPeers = feedPeers
 
-local function sendAll(to, msgs)
+-- The relay tree, built from names, so players who don't all know each other still agree well
+-- enough: every copy of a batch carries the range of names it's for (strictly between lo and hi).
+-- Whoever gets it keeps it, and splits the OpenGroup users it knows in that range (itself left
+-- out) into two halves by name: the first of each half gets the batch, with that half's range.
+-- Players nobody above knew are the only ones it misses (and the backlog fills those in later).
+-- Everyone sends their reports to the root, the OpenGroup user whose name sorts first.
+function N.feedKnown()
+	local out = {}
+	for name, p in pairs(L.live()) do
+		if (P.versionNumber(p.v) or 0) >= 603 then out[#out + 1] = name end
+	end
+	table.sort(out)
+	return out
+end
+-- the (at most two) children for a range, each with its own range
+function N.feedChildren(lo, hi)
+	local me = L.me() and L.short(L.me())
+	local s = {}
+	for _, n in ipairs(N.feedKnown()) do
+		if (not lo or n > lo) and (not hi or n < hi) and n ~= me then s[#s + 1] = n end
+	end
+	if #s == 0 then return {} end
+	local half = math.ceil(#s / 2)
+	local a, b = s[1], s[half + 1]
+	-- each child's range starts at its own name, so nobody gets a copy meant for those above it
+	local out = { { name = a, lo = a, hi = b or hi } }
+	if b then out[2] = { name = b, lo = b, hi = hi } end
+	return out
+end
+
+-- What we pass on this round: lines new to us, merged from everything that arrived (any chat
+-- number), sent as one compressed batch a few seconds after the first of them, so passing on
+-- costs the same however many chat numbers there are.
+local outbox, outboxKeys, flushAt = {}, {}, nil
+local outLo, outHi, outOpen = nil, nil, false   -- the range we pass this round's lines on for
+-- lines we've passed down the tree (or put in): a line we already had, e.g. from our own Trade,
+-- still goes on to our children the first time it comes down the tree
+local passedOn = {}
+local FLUSH_AFTER = 2
+-- widen this round's range to take in (lo, hi); nil = open
+local function widen(lo, hi)
+	if outOpen then return end
+	if outLo == nil and outHi == nil then outLo, outHi = lo or false, hi or false
+	else
+		if outLo ~= false then if not lo then outLo = false elseif lo < outLo then outLo = lo end end
+		if outHi ~= false then if not hi then outHi = false elseif hi > outHi then outHi = hi end end
+	end
+	if outLo == false and outHi == false then outOpen = true end
+end
+local function queueOut(items)
+	for _, it in ipairs(items) do
+		local k = feedKey(it.leader, it.text)
+		if not outboxKeys[k] and not passedOn[k] then outboxKeys[k] = true passedOn[k] = clock() outbox[#outbox + 1] = it end
+	end
+	if #outbox == 0 then outLo, outHi, outOpen = nil, nil, false end
+	if #outbox > 0 and not flushAt then
+		flushAt = clock() + FLUSH_AFTER
+		if C_Timer and C_Timer.After then C_Timer.After(FLUSH_AFTER, function() pcall(N.feedFlush) end) end
+	end
+end
+N.queueOut = queueOut
+
+-- pack lines for these players within what the budget has left: the oldest Trade lines go first
+local function packFor(items, nTargets, digest)
+	local me = L.me() or "?"
+	local keep = {}
+	for _, it in ipairs(items) do keep[#keep + 1] = it end
+	-- LFG before Trade, newest first within each
+	table.sort(keep, function(a, b) if a.kind ~= b.kind then return a.kind == "l" end return a.age < b.age end)
+	local msgs = P.feedPack(me, L.shard(), digest, keep)
+	local room = math.floor(N.feedTokensLeft())
+	while #keep > 0 and #msgs * nTargets > room do
+		local drop = math.max(1, math.floor(#keep * 0.2))
+		for _ = 1, drop do table.remove(keep) N.stats.feedDropped = N.stats.feedDropped + 1 end
+		msgs = #keep > 0 and P.feedPack(me, L.shard(), digest, keep) or {}
+	end
+	return msgs, keep
+end
+
+function N.feedFlush()
+	flushAt = nil
+	if #outbox == 0 then return 0 end
+	local items, t = outbox, clock()
+	local lo, hi = outLo or nil, outHi or nil
+	if outOpen then lo, hi = nil, nil end
+	outbox, outboxKeys, outLo, outHi, outOpen = {}, {}, nil, nil, false
+	local kids = N.feedChildren(lo, hi)
+	-- a whole-tree batch, but we know someone whose name sorts before ours: it's the root, not us
+	if not lo and not hi then
+		local known = N.feedKnown()
+		local me = L.me() and L.short(L.me())
+		if known[1] and me and known[1] < me then kids = { { name = known[1] } } end
+	end
+	if #kids == 0 then return 0 end
+	for _, it in ipairs(items) do it.age = math.max(0, t - (it.got or t)) end
 	local sent = 0
-	for _, m in ipairs(msgs) do
-		if N.feedSpend() then L.send(to, m, true) sent = sent + 1 else N.stats.feedDropped = N.stats.feedDropped + 1 end
+	local digest = math.random(1, 2^30)
+	local msgsFor = {}
+	-- what fits the budget for both children
+	local _, keep = packFor(items, #kids, digest)
+	for _, k in ipairs(kids) do
+		local msgs = P.feedPack(L.me() or "?", L.shard(), digest, keep, k.lo, k.hi)
+		for _, m in ipairs(msgs) do
+			if N.feedSpend() then L.send(k.name, m, true) sent = sent + 1 N.stats.feedFwd = N.stats.feedFwd + 1 end
+		end
 	end
 	return sent
 end
 
--- every 20 seconds: our number's new lines to the other numbers (and Trade to ours), if we report
+-- every 20 seconds (on the same beat for everyone): our number's new lines into the tree, if we report
 function N.feedReport()
 	if not enabled() or not L.shard or L.shard() <= 0 or #feedPending == 0 then return false end
 	local mine, me, t = L.shard(), L.me() or "", clock()
 	local doLFG = N.shareChat() and N.shouldReport(me, N.chatClaims, t, true)
 	local doTrade = N.shareTrade() and N.inTrade() and N.shouldReport(me, N.tradeClaims, t, true)
-	local lfg, trade = {}, {}
+	local items = {}
+	local nl, nt = 0, 0
 	for i = #feedPending, 1, -1 do
 		local e = feedPending[i]
-		if e.kind == "l" and doLFG then lfg[#lfg + 1] = e elseif e.kind == "t" and doTrade then trade[#trade + 1] = e end
-	end
-	feedPending = {}
-	if #lfg + #trade == 0 then return false end
-	local function entries(withLFG, maxN)
-		local items = {}
-		for _, list in ipairs(withLFG and { lfg, trade } or { trade }) do
-			for _, e in ipairs(list) do
-				if #items < maxN then items[#items + 1] = { leader = e.leader, age = math.max(0, t - e.got), kind = e.kind, chan = mine, text = e.text, key = e.key } end
+		if (e.kind == "l" and doLFG) or (e.kind == "t" and doTrade) then
+			if #items < 60 then
+				items[#items + 1] = { leader = e.leader, age = math.max(0, t - e.got), got = e.got, kind = e.kind, chan = mine, text = e.text, key = e.key }
+				if e.kind == "l" then nl = nl + 1 else nt = nt + 1 end
 			end
 		end
-		return items
 	end
-	-- the roots: one or two OpenGroup users per other number; and ours, for Trade out of the city
-	local numbers, nNumbers = {}, 0
-	for name, p in pairs(L.live()) do
-		local n = p.shard or 0
-		if n > 0 and n ~= mine and (P.versionNumber(p.v) or 0) >= 603 and not numbers[n] then numbers[n] = true nNumbers = nNumbers + 1 end
-	end
-	local perNumber = nNumbers <= 3 and 2 or 1
-	local roots = {}
-	for n in pairs(numbers) do
-		local list = feedPeers(n, me)
-		for i = 1, math.min(perNumber, #list) do roots[#roots + 1] = list[i] end
-	end
-	local home = (#trade > 0) and feedPeers(mine, me) or {}
-	local homeRoots = {}
-	for i = 1, math.min(2, #home) do homeRoots[#homeRoots + 1] = home[i] end
-	if #roots == 0 and #homeRoots == 0 then return false end
-	table.sort(roots)
-	-- trim to the round's budget: drop the oldest Trade lines first
-	local maxN = 120
-	local items = entries(true, maxN)
-	local msgs = P.feedPack(me, mine, math.random(1, 2^30), items)
-	local homeItems = entries(false, maxN)
-	local homeMsgs = #homeRoots > 0 and P.feedPack(me, mine, math.random(1, 2^30), homeItems) or {}
-	while maxN > 1 and (#msgs * #roots + #homeMsgs * #homeRoots) > FEED_SEND_MAX do
-		maxN = math.max(1, math.floor(maxN * 0.7))
-		items, homeItems = entries(true, maxN), entries(false, maxN)
-		msgs = P.feedPack(me, mine, math.random(1, 2^30), items)
-		homeMsgs = #homeRoots > 0 and P.feedPack(me, mine, math.random(1, 2^30), homeItems) or {}
-	end
-	local sent = 0
-	for _, to in ipairs(roots) do sent = sent + sendAll(to, msgs) end
-	for _, to in ipairs(homeRoots) do sent = sent + sendAll(to, homeMsgs) end
+	feedPending = {}
+	if #items == 0 then return false end
 	for _, it in ipairs(items) do feedSentKeys[it.key] = t end
-	for _, it in ipairs(homeItems) do feedSentKeys[it.key] = t end
 	N.stats.feedOut = N.stats.feedOut + #items
 	-- the others on our number stand by
+	local home = feedPeers(mine, me)
 	if t - feedClaimAt > 60 then
 		feedClaimAt = t
-		local what = (doLFG and #lfg > 0 and "c" or "") .. (doTrade and #trade > 0 and "t" or "")
-		if what ~= "" then
-			for i = 1, math.min(10, #home) do L.send(home[i], P.reporting(#items, what), true) end
-		end
+		local what = (nl > 0 and "c" or "") .. (nt > 0 and "t" or "")
+		for i = 1, math.min(10, #home) do L.send(home[i], P.reporting(#items, what), true) end
 	end
+	-- into the tree: to the root (the name that sorts first). Our own lines come back down to us
+	-- like everyone else's and go on merged with the rest; if we are the root, they start here
+	local known = N.feedKnown()
+	local me = L.short(me)
+	local root = known[1]
+	if not root or me < root then widen(nil, nil) queueOut(items) return true end
+	local msgs = select(1, packFor(items, 1, math.random(1, 2^30)))
+	local sent = 0
+	for _, m in ipairs(msgs) do if N.feedSpend() then L.send(root, m, true) sent = sent + 1 end end
 	return sent > 0
 end
 
--- lines arriving (relayed, or a backlog): kept, deduplicated, ignored players left out
+-- lines arriving (relayed, or a backlog): kept, deduplicated, ignored players left out; returns
+-- the ones that were new to us
 local function takeLines(items, relay, now)
 	local mine = L.shard()
-	local n = 0
+	local fresh = {}
 	for _, it in ipairs(items) do
 		if not L.isMe(it.leader) and not (L.ignored and L.ignored(it.leader)) then
-			addLine({ key = feedKey(it.leader, it.text), chan = it.chan, kind = it.kind, leader = it.leader, text = it.text,
+			local _, isNew = addLine({ key = feedKey(it.leader, it.text), chan = it.chan, kind = it.kind, leader = it.leader, text = it.text,
 				got = now - it.age, relay = relay, mine = (it.chan == mine) or nil })
-			n = n + 1
+			fresh[#fresh + 1] = { leader = it.leader, age = it.age, got = now - it.age, kind = it.kind, chan = it.chan, text = it.text, new = isNew }
 			-- group posts from another number's LookingForGroup still show in Browse
-			if it.kind == "l" and it.chan ~= mine and it.age < 600 and not L.listings[it.leader] and not L.nearby[it.leader] then
+			if isNew and it.kind == "l" and it.chan ~= mine and it.age < 600 and not L.listings[it.leader] and not L.nearby[it.leader] then
 				local p = N.parse(N.unpackLinks(it.text))
 				if p then
 					L.remote[it.leader] = {
@@ -1246,37 +1330,19 @@ local function takeLines(items, relay, now)
 			end
 		end
 	end
+	local n = 0
+	for _, f in ipairs(fresh) do if f.new then n = n + 1 end end
 	N.stats.feedIn = N.stats.feedIn + n
-	return n
+	return fresh, n
 end
 
--- a World chat message: pass it down the tree on our number, keep its lines once all parts are in
+-- a World chat message: once all its parts are in, keep its lines and pass the new ones on
 L.onFeed = function(sender, d, msg)
 	local t = clock()
 	local id = d.origin .. ":" .. d.digest .. ":" .. d.part
 	if feedSeen[id] or L.isMe(d.origin) then return end
 	feedSeen[id] = t
 	local relay = L.short(sender)
-	-- down the tree: in name order on our number (the reporter left out), user i passes it to 2i+1 and 2i+2
-	local mine = L.shard()
-	if d.hop < P.FEED_HOPS and mine > 0 then
-		local list = feedPeers(mine, d.origin)
-		local me = L.me()
-		if me then list[#list + 1] = L.short(me) table.sort(list) end
-		local i
-		for k, n in ipairs(list) do if L.isMe(n) then i = k end end
-		local fwd = i and P.feedHop(msg, d.hop + 1)
-		if fwd then
-			for _, c in ipairs({ 2 * i + 1, 2 * i + 2 }) do
-				local to = list[c]
-				if to and to ~= relay then
-					if N.feedSpend() then L.send(to, fwd, true) N.stats.feedFwd = N.stats.feedFwd + 1
-					else N.stats.feedDropped = N.stats.feedDropped + 1 end
-				end
-			end
-		end
-	end
-	-- put the parts together
 	local key = d.origin .. ":" .. d.digest
 	local a = feedParts[key]
 	if not a then a = { parts = d.parts, got = 0, pieces = {}, at = t } feedParts[key] = a end
@@ -1286,8 +1352,10 @@ L.onFeed = function(sender, d, msg)
 	feedParts[key] = nil
 	local items = P.feedUnpack(table.concat(a.pieces))
 	if not items then N.stats.feedBad = (N.stats.feedBad or 0) + 1 return end
-	takeLines(items, relay, t)
-	changed()
+	local lines, nNew = takeLines(items, relay, t)
+	-- a backlog (sent past the hop limit) is ours alone; anything else goes down the tree
+	if d.hop < P.FEED_HOPS and #lines > 0 then widen(d.lo, d.hi) queueOut(lines) end
+	if nNew > 0 then changed() end
 end
 
 -- the last hour, for someone who just logged in (B1), at most once every 2 minutes
@@ -1339,11 +1407,16 @@ function N.expireFeed()
 	end
 	for k, at in pairs(feedSentKeys) do if t - at > FEED_REPEAT then feedSentKeys[k] = nil end end
 	for k, at in pairs(feedSeen) do if t - at > 3600 then feedSeen[k] = nil end end
+	for k, at in pairs(passedOn) do if t - at > 3600 then passedOn[k] = nil end end
 	for k, a in pairs(feedParts) do if t - a.at > 120 then feedParts[k] = nil end end
 	for name, at in pairs(N.tradeClaims) do if t - at > 150 then N.tradeClaims[name] = nil end end
 end
 if C_Timer and C_Timer.NewTicker then
-	C_Timer.NewTicker(FEED_EVERY, function() pcall(N.feedReport) end)
+	local lastRound
+	C_Timer.NewTicker(1, function()
+		local r = math.floor(clock() / FEED_EVERY)
+		if r ~= lastRound then lastRound = r pcall(N.feedReport) end
+	end)
 	C_Timer.NewTicker(30, function() pcall(N.expireFeed) end)
 	-- a minute after login, fill in the last hour
 	if C_Timer.After then C_Timer.After(60, function() pcall(N.askBacklog) end) end
