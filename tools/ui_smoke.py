@@ -728,6 +728,10 @@ local named = "WTS |cnIQ3:|Hitem:16712::::::::60:::::::|h[Shadowcraft Gloves]|h|
 assert(Nw.packLinks(named) == "WTS {i16712=Shadowcraft Gloves#3}", "named colours: no stray cnIQ3, quality kept")
 assert(Nw.packLinks("WTS |cnIQ3:[Shadowcraft Gloves]|r") == "WTS [Shadowcraft Gloves]", "a named colour on plain text goes too")
 assert(Nw.parse("LFM BRD |cnIQ3:need heals|r") and Nw.parse("LFM BRD |cnIQ3:need heals|r").need == 2, "the chat parser strips them too")
+-- links never vanish: odd payloads, icons in the name, a link with no colour at all
+assert(Nw.packLinks("WTS |cnIQ3:|Hitem:16712::::::::60:::::::::Player-1-0ABC|h[Shadowcraft Gloves]|h|r 30g") == "WTS {i16712=Shadowcraft Gloves#3} 30g", "a link with extra payload fields keeps its item")
+assert(Nw.packLinks("WTS |cnIQ2:|Hitem:12360::::::::60:::::::|h[|A:Professions-ChatIcon-Quality-Tier1:17:15::1|aArcanite Bar]|h|r") == "WTS {i12360=Arcanite Bar#2}", "icons in a link's name go, the name stays")
+assert(Nw.packLinks("WTS |Hitem:7969::::::::60:::::::|h[Mithril Spurs]|h 1.5g") == "WTS {i7969=Mithril Spurs} 1.5g", "an uncoloured link keeps its item")
 local shown = Nw.unpackLinks("WTS {i16712=Shadowcraft Gloves#3}")
 assert(shown:find("[Shadowcraft Gloves]", 1, true) and shown:find("|cff0070dd", 1, true) and shown:find("|Hitem:16712:", 1, true), "an item the game hasn't loaded still shows its name, a real link and its colour")
 GetItemInfo = function(id) if id == 12360 or tostring(id):find("^item:12360:") then return "Arcanite Bar", "|cff1eff00|Hitem:12360|h[Arcanite Bar]|h|r" end end

@@ -1083,6 +1083,8 @@ function N.stripColours(text)
 	return (text:gsub("|cn[^:|]*:", ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
 end
 function N.packLinks(text)
+	-- icons inside link names (crafting quality and the like) go first
+	text = text:gsub("|A.-|a", ""):gsub("|T.-|t", "")
 	-- coloured links: the colour tells the quality
 	text = text:gsub("(|c[^|]*)|H(%a+):([^|]*)|h%[(.-)%]|h|r", function(colour, kind, payload, name) return token(kind, payload, name, colour) end)
 	text = text:gsub("|H(%a+):([^|]*)|h%[(.-)%]|h", function(kind, payload, name) return token(kind, payload, name, nil) end)

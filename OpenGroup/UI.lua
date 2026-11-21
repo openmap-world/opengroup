@@ -2304,12 +2304,12 @@ end
 local net = page("network")
 local netTitle = net.header:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
 netTitle:SetPoint("TOPLEFT", 4, -10)
-netTitle:SetText("Network")
+netTitle:SetText("Settings")
 local netSub = net.header:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 netSub:SetPoint("TOPLEFT", netTitle, "BOTTOMLEFT", 0, -6)
 netSub:SetWidth(400)
 netSub:SetJustifyH("LEFT")
-netSub:SetText("Listings travel between OpenGroup players in hidden whispers, so they reach every server. Nothing shows in anyone's chat.")
+netSub:SetText("What OpenGroup shares and how it finds players. Listings travel between OpenGroup players in hidden whispers; nothing shows in anyone's chat.")
 
 -- top card: your server and how big the network is
 local card = CreateFrame("Frame", nil, net.content)
@@ -2341,50 +2341,71 @@ local function sectionBar(anchor, text, y)
 	return f
 end
 
--- finding players: mostly automatic now; the button runs one more /who search
-local findBar = sectionBar(card, "Finding players")
-local findHelp = net.content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-findHelp:SetPoint("TOPLEFT", findBar, "BOTTOMLEFT", 6, -8)
-findHelp:SetPoint("RIGHT", net.content, "RIGHT", -16, 0)
-findHelp:SetJustifyH("LEFT")
-findHelp:SetSpacing(3)
-findHelp:SetText("OpenGroup grows by itself: it quietly says hello to your friends, guild, group and anyone you whisper, " ..
-	"and every OpenGroup player you meet shares who they know. Clicking around OpenGroup also runs a /who search now and then (it sees every server).")
-local scanBtn = CreateFrame("Button", nil, net.content, "UIPanelButtonTemplate")
-scanBtn:SetSize(200, 26)
-scanBtn:SetPoint("TOPLEFT", findHelp, "BOTTOMLEFT", -2, -10)
+-- settings: everything you can switch, in one place (two columns)
+do
+	local bar = sectionBar(card, "Settings")
+	net.settingsBar = bar
+	local Nb = OpenGroup_Nearby
+	local function on(key) return db()[key] ~= false end
+	local function set(key) return function(v) db()[key] = v and true or false end end
+	local items = {
+		{ "Share LFG chat from my chat number", function() return Nb.shareChat() end, set("shareChat"),
+			"LookingForGroup chat is per chat number. When you're the OpenGroup player passing on yours, its group posts go to OpenGroup players on every other number (the poster's name, the post and its age)." },
+		{ "Share Trade chat from my chat number", function() return Nb.shareTrade() end, set("shareTrade"),
+			"When you're in a city and passing on your chat number's lines, its trade ads and crafter posts go to OpenGroup players everywhere (World chat). Chatter, gold sellers, boosts and websites are never passed on." },
+		{ "Also list in the game's Group Finder", function() return on("gameList") end, set("gameList"),
+			"When you list for a dungeon or another activity the game knows, OpenGroup lists you in the game's own Group Finder too, so players without the addon see it. Solo or as leader only." },
+		{ "Tell my party when I list", function() return on("tellParty") end, set("tellParty"),
+			"When you list a group, OpenGroup says so in party chat: what it's listed for and which roles it's looking for." },
+		{ "Say hello to players around me", function() return on("nearHello") end, set("nearHello"),
+			"Players you mouse over or walk past get a quiet, hidden hello (one every 2 seconds, each at most once a session), so OpenGroup finds the users around you. Nobody sees anything." },
+		{ "Search the Group Finder in all languages", function() return Nb.allLanguages() end, function(v) db().langAll = v and true or false end,
+			"The game's search only shows your own language unless asked for more. Pick single languages in Browse's Filter menu." },
+	}
+	local boxes = {}
+	for i, it in ipairs(items) do
+		local cb = CreateFrame("CheckButton", nil, net.content, "UICheckButtonTemplate")
+		cb:SetSize(22, 22)
+		local col, row = (i - 1) % 2, math.floor((i - 1) / 2)
+		cb:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 4 + col * 300, -6 - row * 26)
+		local lbl = net.content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+		lbl:SetPoint("LEFT", cb, "RIGHT", 2, 1)
+		lbl:SetText(it[1])
+		cb:SetScript("OnShow", function(self) self:SetChecked(it[2]()) end)
+		cb:SetScript("OnClick", function(self) it[3](self:GetChecked()) L.onChange() end)
+		cb:SetScript("OnEnter", function(self)
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:SetText(it[1])
+			GameTooltip:AddLine(it[4], 1, 1, 1, true)
+			GameTooltip:Show()
+		end)
+		cb:SetScript("OnLeave", GameTooltip_Hide)
+		boxes[i] = cb
+	end
+	net.settingsLast = boxes[#boxes - 1]
+end
+-- finding players: mostly automatic; the footer's Search now runs one more /who search
+local scanBtn = CreateFrame("Button", nil, net.footer, "UIPanelButtonTemplate")
+scanBtn:SetSize(120, 24)
 scanBtn:SetText("Search now")
 scanBtn:SetScript("OnClick", function() L.scan.click() end)
-local scanSpin = W.spinner(net.content, 20)
-scanSpin:SetPoint("LEFT", scanBtn, "RIGHT", 8, 0)
--- passing your server's LookingForGroup posts on to OpenGroup players on other servers (on by default)
-do
-	local cb = CreateFrame("CheckButton", nil, net.content, "UICheckButtonTemplate")
-	cb:SetSize(22, 22)
-	-- its own row under Search now; the next section starts below it
-	cb:SetPoint("TOPLEFT", scanBtn, "BOTTOMLEFT", 0, -8)
-	local lbl = net.content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-	lbl:SetPoint("LEFT", cb, "RIGHT", 4, 1)
-	lbl:SetText("Share LFG chat from my server")
-	net.shareCheck = cb
-	cb:SetScript("OnShow", function(self) self:SetChecked(db().shareChat ~= false) end)
-	cb:SetScript("OnClick", function(self) db().shareChat = self:GetChecked() and true or false end)
-	cb:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-		GameTooltip:SetText("Share LFG chat from my server")
-		GameTooltip:AddLine("When you're the OpenGroup player passing on your server's groups, recent LookingForGroup posts go to OpenGroup players on other servers too (the poster's name, the post and its age). Same realm and faction only.", 1, 1, 1, true)
-		GameTooltip:Show()
-	end)
-	cb:SetScript("OnLeave", GameTooltip_Hide)
-end
+scanBtn:SetScript("OnEnter", function(self)
+	GameTooltip:SetOwner(self, "ANCHOR_TOP")
+	GameTooltip:SetText("Search now")
+	GameTooltip:AddLine("OpenGroup grows by itself: it quietly says hello to your friends, guild, group, anyone you whisper and players around you, and every OpenGroup player you meet shares who they know. This runs one more /who search for OpenGroup players (it sees everyone).", 1, 1, 1, true)
+	GameTooltip:Show()
+end)
+scanBtn:SetScript("OnLeave", GameTooltip_Hide)
+local scanSpin = W.spinner(net.footer, 18)
+scanSpin:SetPoint("RIGHT", scanBtn, "LEFT", -6, 0)
 local scanText = net.content:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
-scanText:SetPoint("LEFT", scanBtn, "RIGHT", 34, 0)
+scanText:SetPoint("BOTTOMLEFT", 14, 26)
 scanText:SetPoint("RIGHT", net.content, "RIGHT", -16, 0)
 scanText:SetJustifyH("LEFT")
 scanText:SetWordWrap(false)
 
 -- who you know, by shard, newest first
-local peersBar = sectionBar(net.shareCheck, "OpenGroup players", -12)
+local peersBar = sectionBar(net.settingsLast, "Network", -14)
 peersBar:SetPoint("LEFT", net.content, "LEFT", 10, 0)
 local shardChips = net.content:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
 shardChips:SetPoint("TOPLEFT", peersBar, "BOTTOMLEFT", 6, -8)
@@ -2440,6 +2461,7 @@ stats:SetJustifyH("LEFT")
 local pingBtn = CreateFrame("Button", nil, net.footer, "UIPanelButtonTemplate")
 pingBtn:SetSize(200, 24)
 pingBtn:SetPoint("RIGHT")
+scanBtn:SetPoint("RIGHT", pingBtn, "LEFT", -6, 0)
 pingBtn:SetText("Test connection to target")
 pingBtn:SetScript("OnClick", function()
 	local name = L.unitName("target")
@@ -2489,7 +2511,7 @@ function net.refresh()
 			r.info:SetText(("%s%s|r   %s"):format(((p.shard or 0) > 0 and OpenGroup_Nearby.sameServer(p.shard)) and GREEN or (p.shard or 0) > 0 and GOLD or GREY, shardText,
 				live[name] and (ago(time() - (p.seen or 0)) .. " ago") or "offline"))
 			-- a short window: rows that would run into the stats line stay hidden
-			local bottom, floor = r:GetBottom(), stats:GetTop()
+			local bottom, floor = r:GetBottom(), scanText:GetTop()
 			r:SetShown(not (type(bottom) == "number" and type(floor) == "number" and bottom < floor + 4))
 		else r:Hide() end
 	end
@@ -3660,34 +3682,19 @@ local chatPage = page("chat")
 		C.refresh()
 	end
 
-	-- footer: sharing ours
-	local cb = CreateFrame("CheckButton", nil, C.footer, "UICheckButtonTemplate")
-	cb:SetSize(22, 22)
-	cb:SetPoint("LEFT", 4, 0)
-	local lbl = C.footer:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-	lbl:SetPoint("LEFT", cb, "RIGHT", 2, 1)
-	lbl:SetText("Share Trade chat from my chat number")
-	cb:SetScript("OnShow", function(self) self:SetChecked(Nb.shareTrade()) end)
-	cb:SetScript("OnClick", function(self) db().shareTrade = self:GetChecked() and true or false end)
-	cb:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_TOP")
-		GameTooltip:SetText("Share Trade chat from my chat number")
-		GameTooltip:AddLine("When you're the OpenGroup player passing on your chat number's lines, its Trade ads and crafter posts go to OpenGroup players on other numbers too (the poster's name, the line and its age). Chatter, gold sellers, boosts and websites are never passed on.", 1, 1, 1, true)
-		GameTooltip:Show()
-	end)
-	cb:SetScript("OnLeave", GameTooltip_Hide)
+	-- (sharing your chat number's Trade lines is switched in Settings)
 end)()
 
 local sideTabs = {}
 sideTabs[1] = sideTab("browse", "Interface\\Icons\\INV_Misc_GroupLooking", "Browse groups")
 sideTabs[2] = sideTab("list", "Interface\\Icons\\INV_Misc_GroupNeedMore", "List a group", sideTabs[1])
-sideTabs[3] = sideTab("network", "Interface\\Icons\\INV_Misc_Gem_Amethyst_02", "Servers and players", sideTabs[2])
-sideTabs[4] = sideTab("whispers", "Interface\\Icons\\INV_Letter_15", "Whispers", sideTabs[3])
-sideTabs[5] = sideTab("find", "Interface\\Icons\\INV_Misc_Spyglass_03", "Find players (/who)", sideTabs[4])
-sideTabs[6] = sideTab("chat", "Interface\\Icons\\INV_Misc_Coin_02", "World chat (LFG and Trade from every chat number)", sideTabs[5])
+sideTabs[3] = sideTab("chat", "Interface\\Icons\\INV_Misc_Coin_02", "World chat (LFG and Trade from every chat number)", sideTabs[2])
+sideTabs[4] = sideTab("find", "Interface\\Icons\\INV_Misc_Spyglass_03", "Find players (/who)", sideTabs[3])
+sideTabs[5] = sideTab("whispers", "Interface\\Icons\\INV_Letter_15", "Whispers", sideTabs[4])
+sideTabs[6] = sideTab("network", "Interface\\Icons\\INV_Misc_Gear_01", "Settings and network", sideTabs[5])
 do
 	-- unread whispers: a gold count on the tab
-	local badge = sideTabs[4]:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	local badge = sideTabs[5]:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	badge:SetPoint("BOTTOMRIGHT", -4, 4)
 	whispers.badge = function() local n = L.whisperUnread() badge:SetText(n > 0 and ("|cffffd100" .. n .. "|r") or "") end
 	whispers.badge()

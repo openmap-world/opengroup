@@ -244,6 +244,7 @@ end
 L.nearQueue, L.nearAsked = {}, {}
 local NEAR_MAX = 30
 function L.noteNearby(unit)
+	if type(OpenGroupDB) == "table" and OpenGroupDB.nearHello == false then return false end
 	if not UnitIsPlayer or not UnitIsPlayer(unit) then return false end
 	if UnitIsUnit and UnitIsUnit(unit, "player") then return false end
 	if UnitFactionGroup and UnitFactionGroup(unit) ~= UnitFactionGroup("player") then return false end

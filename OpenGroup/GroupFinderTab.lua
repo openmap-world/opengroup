@@ -96,19 +96,6 @@ function T.attach()
 		for _, l in pairs(L.listings) do if time() - (l.got or 0) < 300 then n = n + 1 end end
 		badge:SetText(n > 0 and ("|cff40ff40" .. n .. "|r") or "")
 	end)
-	-- on OpenGroup's window: back to the game's Group Finder. It closes OpenGroup; the game's window
-	-- is there underneath if it was open. If it wasn't, OpenGroup can't open it (that would be the
-	-- panel manager call again), so it says which key does.
-	if ui and ui.win and ui.lastTab then
-		local back = makeTab(ui.win, "Interface\\Icons\\INV_Misc_Spyglass_02", "The game's Group Finder (this server only)", function()
-			ui.win:Hide()
-			if not blizz:IsShown() then
-				local key = GetBindingKey and (GetBindingKey("TOGGLELFGPARENT") or GetBindingKey("TOGGLEGROUPFINDER"))
-				UIErrorsFrame:AddMessage(key and ("Press " .. key .. " to open the game's Group Finder.") or "Open the game's Group Finder from the micro menu.", 1, .82, 0)
-			end
-		end)
-		back:SetPoint("TOPLEFT", ui.lastTab, "BOTTOMLEFT", 0, -16)
-	end
 	return true
 end
 
