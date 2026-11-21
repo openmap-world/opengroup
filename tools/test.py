@@ -46,6 +46,11 @@ check("peer exchange roundtrip", kx == "X1" and #dx.peers == 2 and dx.peers[1].n
 check("peer exchange rejects junk", P.parse("X1;") == nil and P.parse("X1;a:nan") == nil)
 check("hello carries version", select(2, P.parse(P.hello(1, 2))).version == P.VERSION)
 check("old hello still parses", select(2, P.parse("H1;47;55")).version == "")
+-- a test build shows the last released version to others (what 0.6.2 compares), its own after it
+local hf = {} for x in (P.hello(47, 60) .. ";"):gmatch("([^;]*);") do hf[#hf + 1] = x end
+check("test build: others see the released version", P.isPrerelease(P.VERSION) and hf[4] == P.RELEASED and hf[5] == P.VERSION)
+check("test build: 0.6.3 reads the real one", select(2, P.parse(P.hello(47, 60))).version == P.VERSION)
+check("released versions aren't prereleases", not P.isPrerelease("0.6.2-beta") and not P.isPrerelease("0.7.0") and P.isPrerelease("0.6.3-test") and P.isPrerelease("1.0.0-dev"))
 check("version number", P.versionNumber("0.6.0-test") == 600 and P.versionNumber("1.2.10") == 10210 and P.versionNumber("x") == nil)
 check("refresh rule", P.isRefresh({seq=1, got=1000}, {seq=1, age=0}, 1100) and not P.isRefresh({seq=1, got=1000}, {seq=1, age=0}, 1020) and not P.isRefresh(nil, {seq=1}, 5))
 local bq = P.listing{leader="Pvp P", seq=1, shard=61, level=60, size=1, age=0, hops=0, class="WARRIOR", need=0, cat=P.BGQ_OFFER, acts={40}, title="", note=""}

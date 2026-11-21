@@ -94,10 +94,16 @@ local function split(s)
 end
 
 P.VERSION = "0.6.3-test"
+-- The last released version. A build that isn't released (-test, -dev, -alpha) shows this one to
+-- other players, so their OpenGroup never says a version is out that isn't; its own version
+-- travels in an extra field that older versions don't read. Update it with each release.
+P.RELEASED = "0.6.2-beta"
+function P.isPrerelease(v) return type(v) ~= "string" or v:find("%-test") ~= nil or v:find("%-dev") ~= nil or v:find("%-alpha") ~= nil end
+P.WIRE_VERSION = P.isPrerelease(P.VERSION) and P.RELEASED or P.VERSION
 P.MAX_PX = 10           -- names per peer-exchange message
 
-function P.hello(shard, level) return ("H1;%d;%d;%s"):format(shard or 0, level or 0, clean(P.VERSION, 16)) end
-function P.answer(shard, level) return ("A1;%d;%d;%s"):format(shard or 0, level or 0, clean(P.VERSION, 16)) end
+function P.hello(shard, level) return ("H1;%d;%d;%s;%s"):format(shard or 0, level or 0, clean(P.WIRE_VERSION, 16), clean(P.VERSION, 16)) end
+function P.answer(shard, level) return ("A1;%d;%d;%s;%s"):format(shard or 0, level or 0, clean(P.WIRE_VERSION, 16), clean(P.VERSION, 16)) end
 
 -- peers = { { name, shard }, ... }; names lose the characters the format uses
 function P.peerList(peers)
@@ -554,7 +560,9 @@ function P.parse(msg)
 	if kind == "H1" or kind == "A1" then
 		local shard, level = int(f[2], 0, 99999), int(f[3], 0, 200)
 		if not shard or not level then return nil end
-		return kind, { shard = shard, level = level, version = clean(f[4] or "", 16) }
+		-- the 5th field (0.6.3 on) is the sender's own version; the 4th, what older versions compare
+		local real = clean(f[5] or "", 16)
+		return kind, { shard = shard, level = level, version = real ~= "" and real or clean(f[4] or "", 16), shown = clean(f[4] or "", 16) }
 	elseif kind == "X1" then
 		local out = {}
 		for entry in (f[2] or ""):gmatch("[^,]+") do

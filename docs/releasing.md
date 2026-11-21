@@ -10,6 +10,7 @@
 
 1. Test it in game.
 2. Set `## Version` in the toc (without the `v`) and add notes under `## v<version>` in `CHANGELOG.md`.
+   Set `P.VERSION` in Proto.lua to the same, and `P.RELEASED` to it too. A build whose version ends in -test, -dev or -alpha shows `P.RELEASED` to other players, so it never tells them a version is out.
 3. Tag it and push the tag, e.g. `git tag v0.6.0-beta` then `git push origin v0.6.0-beta`. This runs the tests, builds the zip and creates the GitHub release. Beta and alpha tags are marked as pre-releases.
 4. To upload to CurseForge, go to Actions, pick "release", click "Run workflow" and enter the tag. Release type "auto" takes it from the tag (-alpha, -beta, otherwise a full release); pick alpha, beta or release to choose. It waits for your approval, does a dry run, then uploads.
 

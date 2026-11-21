@@ -303,16 +303,24 @@ local function sharePeers(to, toShard)
 end
 L.sharePeers = sharePeers
 
-local function notePeerVersion(v)
+-- "a newer OpenGroup is out": only for released versions. A local test build ("-test", "-dev")
+-- someone is trying isn't out, and must not send everyone else looking for it.
+L.newerFrom = {}   -- [version] = { [sender] = true }: who runs a newer released version
+function L.notePeerVersion(v, sender)
+	if P.isPrerelease(v) then return end
 	local n = P.versionNumber(v)
 	if not n then return end
 	local mine = P.versionNumber(L.VERSION) or 0
-	if n > mine and n > (P.versionNumber(L.newest) or 0) then
-		L.newest = v
-		if not L.toldNewer then
-			L.toldNewer = true
-			L.print(("a newer OpenGroup (%s) is out; you have %s. Update when you can."):format(v, L.VERSION))
-		end
+	if n <= mine or n <= (P.versionNumber(L.newest) or 0) then return end
+	-- at least two different players run it before we say it's out
+	local from = L.newerFrom[v] or {}
+	L.newerFrom[v] = from
+	if sender then from[L.short(sender)] = true end
+	if L.count(from) < 2 then return end
+	L.newest = v
+	if not L.toldNewer then
+		L.toldNewer = true
+		L.print(("a newer OpenGroup (%s) is out; you have %s. Update when you can."):format(v, L.VERSION))
 	end
 end
 
@@ -416,7 +424,7 @@ function L.receive(msg, sender)
 	if kind == "H1" then
 		local isNew = L.peers[sender] == nil
 		L.addPeer(sender, d.shard, d.level, d.version)
-		notePeerVersion(d.version)
+		L.notePeerVersion(d.version, sender)
 		-- answer a given sender's hello at most every 30 seconds (one hello makes several whispers)
 		if answeredAt[sender] and now() - answeredAt[sender] < 30 then return end
 		answeredAt[sender] = now()
@@ -428,7 +436,7 @@ function L.receive(msg, sender)
 	elseif kind == "A1" then
 		local isNew = L.peers[sender] == nil
 		L.addPeer(sender, d.shard, d.level, d.version)
-		notePeerVersion(d.version)
+		L.notePeerVersion(d.version, sender)
 		if L.mine then L.send(sender, P.listing(L.mineForSend())) end
 		if isNew then sharePeers(sender, d.shard) end
 		if isNew and L.onPeer then L.onPeer(sender) end
@@ -1433,3 +1441,4 @@ if CreateFrame then
 	for _, ev in ipairs({ "UPDATE_MOUSEOVER_UNIT", "NAME_PLATE_UNIT_ADDED" }) do pcall(nf.RegisterEvent, nf, ev) end
 	nf:SetScript("OnEvent", function(_, ev, unit) pcall(L.noteNearby, ev == "UPDATE_MOUSEOVER_UNIT" and "mouseover" or unit) end)
 end
+

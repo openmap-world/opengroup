@@ -887,5 +887,21 @@ assert(#url < 4000, "short enough for a browser")
 assert(OpenGroup.reportURL("idea"):find("template=feature.yml", 1, true), "the idea form")
 SlashCmdList.OPENGROUP("bug")
 print("report ok")
+-- "a newer version is out": released versions only, and from two different players
+local said = {}
+local savePrint2 = OpenGroup.print
+OpenGroup.print = function(m) said[#said + 1] = m end
+OpenGroup.newest, OpenGroup.toldNewer, OpenGroup.newerFrom = nil, nil, {}
+OpenGroup.notePeerVersion("0.9.0-test", "Tess T") OpenGroup.notePeerVersion("0.9.0-test", "Tim T")
+assert(#said == 0 and OpenGroup.newest == nil, "a test build never counts as out")
+OpenGroup.notePeerVersion("0.7.0", "Rel R")
+assert(#said == 0, "one player isn't enough")
+OpenGroup.notePeerVersion("0.7.0", "Rel R")
+assert(#said == 0, "the same player twice isn't either")
+OpenGroup.notePeerVersion("0.7.0", "Two T")
+assert(#said == 1 and OpenGroup.newest == "0.7.0", "two players running it: it's out")
+OpenGroup.print = savePrint2
+OpenGroup.newest, OpenGroup.toldNewer = nil, nil
+print("version notice ok")
 print("smoke OK")
 ''')
