@@ -681,11 +681,10 @@ local function buildRow(row)
 		row.roles[i] = row:CreateTexture(nil, "ARTWORK")
 		-- a needed slot glows (green, gold when it wants a role you play), softly pulsing
 		-- a soft round glow, a little larger than the icon (no square fill)
-		row.glow[i] = row:CreateTexture(nil, "OVERLAY")
-		row.glow[i]:SetTexture("Interface\Buttons\UI-ActionButton-Border")
-		row.glow[i]:SetBlendMode("ADD")
+		row.glow[i] = row:CreateTexture(nil, "BORDER")
+		row.glow[i]:SetTexture(DISC)
 		row.glow[i]:SetPoint("CENTER", row.roles[i], "CENTER", 0, 0)
-		row.glow[i]:SetSize(38, 38)
+		row.glow[i]:SetSize(30, 30)
 		row.glow[i]:Hide()
 		if row.glow[i].CreateAnimationGroup then
 			local g = row.glow[i]:CreateAnimationGroup()
@@ -789,7 +788,7 @@ local function buildRow(row)
 		elseif l.src == "chat" then GameTooltip:AddLine(("Posted in %s chat (your server only)"):format(l.chan or "a"), .5, .5, .5)
 		else GameTooltip:AddLine(l.hops == 0 and "Heard from them directly" or ("Passed on by %s"):format(L.short(l.via)), .5, .5, .5) end
 		if l.unconfirmed then GameTooltip:AddLine("Not confirmed by the leader yet. OpenGroup is checking with them.", 1, .6, .2, true) end
-		if r and r.dim then GameTooltip:AddLine(l.size >= 5 and "This group is full." or "They don't need a role you play.", 1, .5, .3) end
+		if r and r.dim then GameTooltip:AddLine(l.size >= 5 and "This group is full." or "Doesn't need your role.", 1, .5, .3) end
 		GameTooltip:AddLine(l.size > 1 and "Double-click to ask to join." or "Double-click to invite.", 0, 1, 0)
 		GameTooltip:Show()
 	end)
@@ -832,6 +831,9 @@ local function layoutRow(row, compact)
 end
 
 local QUESTION_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
+-- a plain white disc (the round portrait mask every client has): tinted, it's the needed-slot ring
+-- behind a round role icon, and the dim round empty slot
+local DISC = "Interface\\CHARACTERFRAME\\TempPortraitAlphaMask"
 -- what goes in the Group column: { {kind = "member"|"unknown"|"open"|"any", class, role}, text = "solo"|"12/40"|nil }
 function browse.slotsOf(l, r)
 	local out = {}
@@ -964,7 +966,7 @@ local function fillRow(row, d)
 	row.note:SetText(note)
 	row.note:SetShown(not compact and note ~= "")
 	row.shard:SetText((r.where == "finder" and (GREY .. "Group Finder|r") or r.where == "chat" and (GREY .. (l.chan or "LFG chat") .. "|r")
-		or r.where == "mine" and (GREY .. "Your server|r") or (GOLD .. OpenGroup_Nearby.whereText(l.shard) .. "|r")) .. (l.unconfirmed and (GREY .. " ?|r") or "")
+		or r.where == "mine" and (GREY .. "Your server|r") or (GOLD .. OpenGroup_Nearby.whereText(l.shard) .. "|r"))
 		.. (r.gf and (GREY .. " GF|r") or ""))
 	if r.chatPost then row.shard:SetText(GOLD .. "LFG " .. l.shard .. "|r") end
 	-- Group: up to five slots. Members first (the leader, then the others: class icon with a role
@@ -976,6 +978,7 @@ local function fillRow(row, d)
 		local sl = slots[k]
 		local badge, plus, glow = row.badge[k], row.plus[k], row.glow[k]
 		badge:Hide() plus:Hide() glow:Hide()
+		plus:SetText("+") plus:SetTextColor(0.25, 1, 0.25) plus:ClearAllPoints() plus:SetPoint("CENTER", t, "BOTTOMRIGHT", -1, 2)
 		if glow.pulse then glow.pulse:Stop() end
 		if sl then
 			t:SetTexCoord(0, 1, 0, 1) t:SetDesaturated(false) t:SetVertexColor(1, 1, 1) t:SetAlpha(1)
@@ -984,20 +987,21 @@ local function fillRow(row, d)
 				t:SetAlpha(0.6)
 				if (sl.role or 0) > 0 and W.ROLE_ATLAS[sl.role] then badge:SetAtlas(W.ROLE_ATLAS[sl.role]) badge:Show() end
 			elseif sl.kind == "unknown" then
-				-- someone we don't know yet: a quiet grey "?"
-				t:SetTexture(QUESTION_ICON) t:SetDesaturated(true) t:SetAlpha(0.3)
+				-- someone we don't know yet: a dim round slot with a faint grey "?"
+				t:SetTexture(DISC) t:SetVertexColor(0.45, 0.42, 0.38) t:SetAlpha(0.3)
+				plus:SetText("?") plus:SetTextColor(0.7, 0.7, 0.7) plus:ClearAllPoints() plus:SetPoint("CENTER", t, "CENTER", 0, 0) plus:Show()
 			elseif sl.kind == "play" then
 				t:SetAtlas(W.ROLE_ATLAS[sl.role])
 			elseif sl.kind == "open" then
 				W.spotIcon(t, sl.role, sl.class)
 				local mine = browse.slotWantsMe(sl)
 				glow:SetVertexColor(mine and 1 or 0.3, mine and 0.8 or 1, mine and 0.2 or 0.35, 1)
-				-- (the texture's ring sits in its middle 36 of 64: this size puts it just outside the icon)
-				glow:SetSize(compact and 44 or 52, compact and 44 or 52)
+				glow:SetSize(compact and 24 or 29, compact and 24 or 29)
 				glow:Show()
 				if glow.pulse and not calm then glow.pulse:Play() end
 			else
-				t:SetColorTexture(0.3, 0.25, 0.18, 0.4)
+				-- a free place anyone could take: a dim round slot
+				t:SetTexture(DISC) t:SetVertexColor(0.45, 0.42, 0.38) t:SetAlpha(0.18)
 			end
 			t:Show()
 		else
@@ -4199,11 +4203,10 @@ end)()
 			local p = c:CreateFontString(nil, "OVERLAY", "GameFontGreen")
 			p:SetPoint("CENTER", t, "BOTTOMRIGHT", -1, 2)
 			p:SetText("+")
-			local gl = c:CreateTexture(nil, "OVERLAY")
-			gl:SetTexture("Interface\Buttons\UI-ActionButton-Border")
-			gl:SetBlendMode("ADD")
+			local gl = c:CreateTexture(nil, "BORDER")
+			gl:SetTexture(DISC)
 			gl:SetPoint("CENTER", t, "CENTER", 0, 0)
-			gl:SetSize(60, 60)
+			gl:SetSize(34, 34)
 			gl:Hide()
 			c.glows = c.glows or {}
 			c.glows[i] = gl
@@ -4282,7 +4285,7 @@ end)()
 					if (sl.role or 0) > 0 and W.ROLE_ATLAS[sl.role] then b:SetAtlas(W.ROLE_ATLAS[sl.role]) b:Show() end
 					w:SetText(ROLE_WORD[sl.role or 0] or (sl.class and W.className(sl.class)) or "")
 				elseif sl.kind == "unknown" then
-					t:SetTexture(QUESTION_ICON) t:SetAlpha(0.6) w:SetText(GREY .. "member|r")
+					t:SetTexture(DISC) t:SetVertexColor(0.45, 0.42, 0.38) t:SetAlpha(0.3) w:SetText(GREY .. "member ?|r")
 				elseif sl.kind == "play" then
 					t:SetAtlas(W.ROLE_ATLAS[sl.role]) w:SetText(ROLE_WORD[sl.role] or "")
 				elseif sl.kind == "open" then
@@ -4292,7 +4295,7 @@ end)()
 					c.glows[i]:Show()
 					w:SetText((mine and GOLD or GREEN) .. "need " .. ((ROLE_WORD[sl.role or 0] or "any"):lower()) .. "|r")
 				else
-					t:SetColorTexture(0.3, 0.25, 0.18, 0.5) w:SetText(GREY .. "open|r")
+					t:SetTexture(DISC) t:SetVertexColor(0.45, 0.42, 0.38) t:SetAlpha(0.18) w:SetText(GREY .. "open|r")
 				end
 				t:Show() w:Show()
 			else

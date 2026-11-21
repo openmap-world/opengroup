@@ -425,4 +425,10 @@ check("default width fills too", math.abs(lm.x + lm.w - 470) < 1 and mid.at.wher
 return table.concat(out, string.char(10))
 """)
 print(t); assert "FAIL" not in t
+# texture paths: a single backslash in Lua source is dropped ("Interface\\Buttons" needs two)
+import re as _re
+_B = chr(92)
+for _f, _src in src.items():
+    for _m in _re.finditer(r'"(Interface[^"]*)"', _src):
+        assert not (_B in _m.group(1) and (_B + _B) not in _m.group(1)), "single backslash in a path: " + _f + " " + _m.group(1)
 print("ALL OK")
