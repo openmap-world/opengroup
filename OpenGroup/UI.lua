@@ -3512,12 +3512,172 @@ local finder = page("find")
 	end
 end)()
 
+-- --------------------------------------------------------------------------------------------
+-- WORLD CHAT: the useful LookingForGroup and Trade lines from every chat number OpenGroup users
+-- are on, newest first (Nearby.lua's World chat section collects and relays them).
+
+local chatPage = page("chat")
+;(function()
+	local C = chatPage
+	local Nb = OpenGroup_Nearby
+	C.search = ""
+	local function flag(key, default) local v = db()[key] if v == nil then return default end return v end
+
+	local box = CreateFrame("EditBox", nil, C.header, "SearchBoxTemplate")
+	box:SetSize(220, 22)
+	box:SetPoint("TOPLEFT", 8, -8)
+	box:SetAutoFocus(false)
+	if box.Instructions then box.Instructions:SetText("Search, e.g. arcanite or BRD") end
+	box:HookScript("OnTextChanged", function(self)
+		local t = (self:GetText() or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+		if t ~= C.search then C.search = t C.refresh() end
+	end)
+	local function check(label, key, x, tip)
+		local cb = CreateFrame("CheckButton", nil, C.header, "UICheckButtonTemplate")
+		cb:SetSize(22, 22)
+		cb:SetPoint("LEFT", box, "RIGHT", x, 0)
+		local l = C.header:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+		l:SetPoint("LEFT", cb, "RIGHT", 2, 1)
+		l:SetText(label)
+		cb:SetScript("OnShow", function(self) self:SetChecked(flag(key, true)) end)
+		cb:SetScript("OnClick", function(self) db()[key] = self:GetChecked() and true or false C.refresh() end)
+		if tip then
+			cb:SetScript("OnEnter", function(self) GameTooltip:SetOwner(self, "ANCHOR_BOTTOM") GameTooltip:SetText(label) GameTooltip:AddLine(tip, 1, 1, 1, true) GameTooltip:Show() end)
+			cb:SetScript("OnLeave", GameTooltip_Hide)
+		end
+		return cb
+	end
+	check("LFG", "chatShowLFG", 14)
+	check("Trade", "chatShowTrade", 64)
+	check("Mine", "chatShowMine", 124, "Lines from your own chat number, which you also see in your chat window.")
+	C.status = C.header:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+	C.status:SetPoint("TOPLEFT", box, "BOTTOMLEFT", -4, -10)
+	C.status:SetPoint("RIGHT", C.header, "RIGHT", -8, 0)
+	C.status:SetJustifyH("LEFT")
+
+	local list = CreateFrame("Frame", nil, C.content, "WowScrollBoxList")
+	list:SetPoint("TOPLEFT", 6, -6)
+	list:SetPoint("BOTTOMRIGHT", -24, 6)
+	local bar = CreateFrame("EventFrame", nil, C.content, "MinimalScrollBar")
+	bar:SetPoint("TOPLEFT", list, "TOPRIGHT", 6, 0)
+	bar:SetPoint("BOTTOMLEFT", list, "BOTTOMRIGHT", 6, 0)
+	C.empty = C.content:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+	C.empty:SetPoint("CENTER", 0, 20)
+	C.empty:SetWidth(380)
+	C.empty:SetSpacing(4)
+
+	local function label(e)
+		if e.mine then return GREY .. "Here|r" end
+		return (e.kind == "t" and "|cffffc0a0Trade " or "|cffa0d0ffLFG ") .. e.chan .. "|r"
+	end
+	local view = CreateScrollBoxListLinearView()
+	view:SetElementExtent(20)
+	view:SetElementInitializer("Button", function(row, e)
+		if not row.built then
+			row.hl = row:CreateTexture(nil, "HIGHLIGHT")
+			row.hl:SetAllPoints()
+			row.hl:SetColorTexture(1, 0.9, 0.6, 0.08)
+			local function fs(x, w, font)
+				local f = row:CreateFontString(nil, "ARTWORK", font or "GameFontHighlightSmall")
+				f:SetPoint("LEFT", x, 0)
+				if w then f:SetWidth(w) end
+				f:SetJustifyH("LEFT")
+				f:SetWordWrap(false)
+				return f
+			end
+			row.age = fs(6, 32, "GameFontDisableSmall")
+			row.where = fs(40, 62)
+			row.name = fs(104, 110, "GameFontNormalSmall")
+			row.text = fs(218, nil)
+			row.text:SetPoint("RIGHT", -6, 0)
+			row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+			row:SetScript("OnClick", function(self, button)
+				local x = self.e
+				if not x then return end
+				if button == "RightButton" then if browse.personMenu then browse.personMenu(self, x.leader, nil) end return end
+				if browse.openTell then browse.openTell(x.leader, "") end
+			end)
+			row:SetScript("OnEnter", function(self)
+				local x = self.e
+				if not x then return end
+				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+				local item = Nb.firstItem(x.text)
+				local link = item and GetItemInfo and select(2, GetItemInfo(item))
+				if link then GameTooltip:SetHyperlink(link) GameTooltip:AddLine(" ") end
+				GameTooltip:AddLine(x.leader, 1, .82, 0)
+				GameTooltip:AddLine(Nb.unpackLinks(x.text), 1, 1, 1, true)
+				GameTooltip:AddLine((x.mine and "Your chat number" or ((x.kind == "t" and "Trade" or "LookingForGroup") .. ", " .. L.CHAN .. " " .. x.chan))
+					.. (x.relay and (", relayed by " .. x.relay) or ""), .6, .6, .6, true)
+				GameTooltip:AddLine("Click to whisper. Right-click for more.", 0, 1, 0)
+				GameTooltip:Show()
+			end)
+			row:SetScript("OnLeave", GameTooltip_Hide)
+			row.built = true
+		end
+		row.e = e
+		local secs = math.max(0, time() - e.got)
+		row.age:SetText(secs < 60 and "now" or (math.floor(secs / 60) .. "m"))
+		row.where:SetText(label(e))
+		row.name:SetText(W.classColor(e.class) .. e.leader .. "|r")
+		row.text:SetText(Nb.unpackLinks(e.text))
+	end)
+	ScrollUtil.InitScrollBoxListWithScrollBar(list, bar, view)
+
+	function C.rows()
+		local out = {}
+		local q = C.search or ""
+		for _, e in ipairs(Nb.feed or {}) do
+			local ok = (e.kind == "t" and flag("chatShowTrade", true)) or (e.kind == "l" and flag("chatShowLFG", true))
+			if ok and e.mine and not flag("chatShowMine", true) then ok = false end
+			if ok and L.ignored(e.leader) then ok = false end
+			if ok and q ~= "" and not (e.leader .. " " .. Nb.unpackLinks(e.text)):lower():find(q, 1, true) then ok = false end
+			if ok then out[#out + 1] = e end
+		end
+		table.sort(out, function(a, b) return a.got > b.got end)
+		return out
+	end
+	function C.refresh()
+		if not C.content:IsShown() then return end
+		local rows = C.rows()
+		list:SetDataProvider(CreateDataProvider(rows), ScrollBoxConstants.RetainScrollPosition)
+		local nums = {}
+		for _, e in ipairs(Nb.feed or {}) do if not e.mine then nums[e.chan] = true end end
+		local keys = {}
+		for k in pairs(nums) do keys[#keys + 1] = k end
+		table.sort(keys)
+		C.status:SetText(#keys > 0 and ("From " .. L.CHAN .. " " .. table.concat(keys, ", ") .. " and yours.  " .. #rows .. " lines, last 10 minutes.")
+			or "Only your own chat number so far.")
+		C.empty:SetShown(#rows == 0)
+		C.empty:SetText((Nb.feed and #Nb.feed > 0) and "Nothing matches." or
+			"Trade ads, crafters and group posts from every chat number with an OpenGroup user show up here. Lines from other numbers arrive about every 20 seconds.")
+	end
+	C.onShow = C.refresh
+
+	-- footer: sharing ours
+	local cb = CreateFrame("CheckButton", nil, C.footer, "UICheckButtonTemplate")
+	cb:SetSize(22, 22)
+	cb:SetPoint("LEFT", 4, 0)
+	local lbl = C.footer:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+	lbl:SetPoint("LEFT", cb, "RIGHT", 2, 1)
+	lbl:SetText("Share Trade chat from my chat number")
+	cb:SetScript("OnShow", function(self) self:SetChecked(Nb.shareTrade()) end)
+	cb:SetScript("OnClick", function(self) db().shareTrade = self:GetChecked() and true or false end)
+	cb:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:SetText("Share Trade chat from my chat number")
+		GameTooltip:AddLine("When you're the OpenGroup player passing on your chat number's lines, its Trade ads and crafter posts go to OpenGroup players on other numbers too (the poster's name, the line and its age). Chatter, gold sellers, boosts and websites are never passed on.", 1, 1, 1, true)
+		GameTooltip:Show()
+	end)
+	cb:SetScript("OnLeave", GameTooltip_Hide)
+end)()
+
 local sideTabs = {}
 sideTabs[1] = sideTab("browse", "Interface\\Icons\\INV_Misc_GroupLooking", "Browse groups")
 sideTabs[2] = sideTab("list", "Interface\\Icons\\INV_Misc_GroupNeedMore", "List a group", sideTabs[1])
 sideTabs[3] = sideTab("network", "Interface\\Icons\\INV_Misc_Gem_Amethyst_02", "Servers and players", sideTabs[2])
 sideTabs[4] = sideTab("whispers", "Interface\\Icons\\INV_Letter_15", "Whispers", sideTabs[3])
 sideTabs[5] = sideTab("find", "Interface\\Icons\\INV_Misc_Spyglass_03", "Find players (/who)", sideTabs[4])
+sideTabs[6] = sideTab("chat", "Interface\\Icons\\INV_Misc_Coin_02", "World chat (LFG and Trade from every chat number)", sideTabs[5])
 do
 	-- unread whispers: a gold count on the tab
 	local badge = sideTabs[4]:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -3556,7 +3716,7 @@ win:SetScript("OnShow", function()
 end)
 C_Timer.NewTicker(2, refresh)
 
-OpenGroup_UI = { list = list, browse = browse, personItems = function(n, l) return browse.personItems(n, l) end, win = win, lastTab = sideTabs[5], find = finder, whisper = function(name) browse.openWhisper(name) end, showPage = showPage, qbar = qbar, toggle = function(tab)
+OpenGroup_UI = { list = list, browse = browse, personItems = function(n, l) return browse.personItems(n, l) end, win = win, lastTab = sideTabs[6], find = finder, chat = chatPage, whisper = function(name) browse.openWhisper(name) end, showPage = showPage, qbar = qbar, toggle = function(tab)
 	if win:IsShown() and (not tab or db().tab == tab) then win:Hide() return end
 	if tab then db().tab = tab end
 	win:Show()

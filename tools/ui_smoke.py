@@ -488,7 +488,7 @@ OpenGroup.whisperEvent(nil, "CHAT_MSG_WHISPER_INFORM", typed, "Who 4")
 assert(F.asked["Who 4"] and F.nextTarget().fullName == "Who 5", "asked once it went out; next moves on")
 date = date or function() return "12:00" end
 local frow = CreateFrame("Button") frow.built = false
-INITS[#INITS](frow, F.results[4])
+INITS[#INITS - 1](frow, F.results[4])
 print("find row badge:", frow.badge:GetText())
 ChatFrame_SendTell = nil ChatEdit_GetActiveWindow = nil
 -- servers: a Trade number whose Group Finder we nearly all had is our server
@@ -715,5 +715,86 @@ print("word of mouth:", #xs, "messages,", total, "names; first:", xs[1]:sub(1, 4
 assert(total == 20 and #xs == 2, "20 names in two messages")
 assert(xs[1]:find(":55"), "other chat numbers first")
 print("discovery ok")
+-- World chat: what's worth passing on, item links as IDs, the relay tree, repeats and the budget
+local Nw, Pw = OpenGroup_Nearby, OpenGroup_Proto
+assert(Nw.feedKeep("WTS [Arcanite Bar] 4g each") and Nw.feedKeep("LFM BRD need heals") and Nw.feedKeep("LF enchanter for crusader, tips"), "ads, groups, crafters kept")
+assert(not Nw.feedKeep("lol anyone seen my dog") and not Nw.feedKeep("cheap gold at www.goldsite.com") and not Nw.feedKeep("WTS BRD boost 10g") and not Nw.feedKeep("WTS strat carry"), "chatter, gold sellers, boosts dropped")
+local linked = "WTS |cff1eff00|Hitem:12360::::::::60:::::::|h[Arcanite Bar]|h|r 4g"
+assert(Nw.packLinks(linked) == "WTS {i12360} 4g", "item links travel as IDs")
+GetItemInfo = function(id) if id == 12360 then return "Arcanite Bar", "|cff1eff00|Hitem:12360|h[Arcanite Bar]|h|r" end end
+assert(Nw.unpackLinks("WTS {i12360} 4g"):find("Arcanite Bar", 1, true) and Nw.unpackLinks("{i999}") == "[item 999]", "rebuilt on arrival")
+-- our number 47; other numbers 55 (three users) and 56 (one); one older user on 56
+for n in pairs(OpenGroup.peers) do OpenGroup.peers[n] = nil end
+GetChannelList = function() return 1, "Trade 47", false end
+OpenGroup.peers["Abe A"] = { shard = 55, level = 60, seen = CLOCK, v = "0.6.3-test" }
+OpenGroup.peers["Bea B"] = { shard = 55, level = 60, seen = CLOCK, v = "0.6.3-test" }
+OpenGroup.peers["Cid C"] = { shard = 55, level = 60, seen = CLOCK, v = "0.6.3-test" }
+OpenGroup.peers["Dot D"] = { shard = 56, level = 60, seen = CLOCK, v = "0.6.3-test" }
+OpenGroup.peers["Old O"] = { shard = 56, level = 60, seen = CLOCK, v = "0.6.2-beta" }
+Nw.chatClaims = {} Nw.feedTokensReset()
+OpenGroupDB.shareTrade, OpenGroupDB.shareChat = nil, nil
+local sends = {}
+local saveSend4 = OpenGroup.send
+OpenGroup.send = function(to, m, ...) sends[#sends + 1] = { to = to, m = m } end
+Nw.onChat(linked, "Sel S", "2. Trade - City 47", "Trade - City 47", nil)
+Nw.onChat("lol", "Chat C", "2. Trade - City 47", "Trade - City 47", nil)
+Nw.onChat("LFM BRD need heals", "Lead L", "4. LookingForGroup 47", "LookingForGroup 47", nil)
+assert(Nw.feedReport(), "the reporter sends")
+local to = {}
+for _, x in ipairs(sends) do if x.m:sub(1, 2) == "T1" then to[x.to] = (to[x.to] or 0) + 1 end end
+print("World chat roots:", (function() local k = {} for n in pairs(to) do k[#k + 1] = n end table.sort(k) return table.concat(k, ", ") end)())
+assert(to["Abe A"] and to["Bea B"] and to["Dot D"] and not to["Cid C"] and not to["Old O"], "two roots per number (few numbers), only 0.6.3 users")
+local tmsg
+for _, x in ipairs(sends) do if x.m:sub(1, 2) == "T1" then tmsg = x.m end end
+local kk, dd = Pw.parse(tmsg)
+assert(kk == "T1" and dd.chan == 47 and #dd.items == 2 and dd.items[1].kind == "l" and dd.items[2].text:find("{i12360}", 1, true), "LFG first, Trade with item IDs, chatter left out")
+sends = {}
+Nw.onChat(linked, "Sel S", "2. Trade - City 47", "Trade - City 47", nil)
+assert(not Nw.feedReport() and #sends == 0, "the same line within 10 minutes isn't sent again")
+-- receiving on 55 as the first user in name order: keep the lines, pass down to users 3 and 4
+GetChannelList = function() return 1, "Trade 55", false end
+for n in pairs(OpenGroup.peers) do OpenGroup.peers[n] = nil end
+local roster = { "Abe A", "Bea B", "Cid C", "Eve E", "Fay F" }
+for _, n in ipairs(roster) do OpenGroup.peers[n] = { shard = 55, level = 60, seen = CLOCK, v = "0.6.3-test" } end
+-- we are "Ann A": in name order Ann is 2nd of 6 (Abe, Ann, Bea, Cid, Eve, Fay): children 5 and 6
+sends = {}
+Nw.feed = {} OpenGroup.nearby = {} OpenGroup.remote = {}
+local msgIn = Pw.feedDigest(47, 777, { { leader = "Sel S", age = 3, kind = "t", text = "WTS {i12360} 4g" }, { leader = "Lead L", age = 2, kind = "l", text = "LFM BRD need heals" } })[1]
+OpenGroup.receive(msgIn, "Abe A")
+local fw = {}
+for _, x in ipairs(sends) do if x.m:sub(1, 2) == "T1" then fw[#fw + 1] = x.to end end
+table.sort(fw)
+print("forwarded to:", table.concat(fw, ", "))
+assert(#Nw.feed == 2 and fw[1] == "Eve E" and fw[2] == "Fay F" and select(2, Pw.parse(sends[1].m)).hop == 1, "kept, and passed down the tree one hop further")
+assert(OpenGroup.remote["Lead L"] and OpenGroup.remote["Lead L"].src == "remotechat", "its group posts still feed Browse")
+sends = {}
+OpenGroup.receive(msgIn, "Bea B")
+assert(#sends == 0, "a message reaches us once")
+C_FriendList.IsIgnored = function(n) return n == "Spam S" end
+OpenGroup.receive(Pw.feedDigest(47, 778, { { leader = "Spam S", age = 1, kind = "t", text = "WTS stuff" } })[1], "Abe A")
+for _, e in ipairs(Nw.feed) do assert(e.leader ~= "Spam S", "ignored players' lines are dropped") end
+C_FriendList.IsIgnored = function() return false end
+-- the budget: about 24 a minute; a flood past it is dropped, not queued
+Nw.feedTokensReset()
+local ok, spent = true, 0
+for i = 1, 40 do if Nw.feedSpend() then spent = spent + 1 end end
+assert(spent == 12, "a burst of 12, then the budget")
+OpenGroup.send = saveSend4
+-- the tab
+OpenGroupDB.tab = "chat" SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+OpenGroup_UI.showPage("chat")
+local chatRows = OpenGroup_UI.chat.rows()
+assert(#chatRows == 2, "both lines in the World chat tab")
+OpenGroup_UI.chat.search = "arcanite"
+assert(#OpenGroup_UI.chat.rows() == 1, "search finds item names")
+OpenGroup_UI.chat.search = ""
+OpenGroupDB.chatShowTrade = false
+assert(#OpenGroup_UI.chat.rows() == 1 and OpenGroup_UI.chat.rows()[1].kind == "l", "the Trade filter")
+OpenGroupDB.chatShowTrade = nil
+local crow = CreateFrame("Button") crow.built = false
+INITS[#INITS](crow, chatRows[1])
+crow.scripts.OnEnter(crow)
+GetChannelList = function() return 1, "Trade 47", false end
+print("world chat ok")
 print("smoke OK")
 ''')

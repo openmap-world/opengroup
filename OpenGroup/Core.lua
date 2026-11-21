@@ -466,6 +466,9 @@ function L.receive(msg, sender)
 		-- another shard's Group Finder groups (Nearby keeps them)
 		if L.peers[sender] then L.peers[sender].seen = now() end
 		if L.onFinderDigest then pcall(L.onFinderDigest, sender, d) end
+	elseif kind == "T1" then
+		if L.peers[sender] then L.peers[sender].seen = now() end
+		if L.onFeed then pcall(L.onFeed, sender, d, msg) end
 	elseif kind == "C1" then
 		if L.peers[sender] then L.peers[sender].seen = now() end
 		if L.onChatDigest then pcall(L.onChatDigest, sender, d) end

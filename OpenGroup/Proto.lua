@@ -199,6 +199,39 @@ function P.chatDigest(shard, digest, items)
 	return out
 end
 
+-- World chat (0.6.3): a chat number's useful LookingForGroup and Trade lines, passed on down a
+-- relay tree. T1;chan;digest;part;parts;hop;name^age^kind^text~... (kind l = LookingForGroup,
+-- t = Trade; item links travel as {i<itemID>}). Older versions ignore T1.
+P.MAX_FEED, P.FEED_TEXT, P.FEED_HOPS = 40, 160, 6
+function P.feedDigest(chan, digest, entries)
+	local list = {}
+	for _, it in ipairs(entries or {}) do
+		if #list >= P.MAX_FEED then break end
+		local name, text = chatClean(it.leader, P.NAME_LEN), chatClean(it.text, P.FEED_TEXT)
+		local kind = it.kind == "t" and "t" or "l"
+		if name ~= "" and text ~= "" then list[#list + 1] = ("%s^%d^%s^%s"):format(name, int(it.age, 0, 86400) or 0, kind, text) end
+	end
+	local head = ("T1;%d;%d;"):format(int(chan, 0, 99999) or 0, int(digest, 0, 2^31) or 0)
+	local parts, cur, len = {}, {}, 0
+	local room = P.MAX_LEN - #head - 10
+	for _, e in ipairs(list) do
+		if #cur > 0 and len + #e + 1 > room then parts[#parts + 1] = cur cur, len = {}, 0 end
+		cur[#cur + 1] = e
+		len = len + #e + 1
+	end
+	if #cur > 0 then parts[#parts + 1] = cur end
+	local out = {}
+	for i, part in ipairs(parts) do out[i] = head .. i .. ";" .. #parts .. ";0;" .. table.concat(part, "~") end
+	return out
+end
+-- the same message one hop further down the tree
+function P.feedHop(msg, hop)
+	local f = split(msg)
+	if f[1] ~= "T1" or #f < 7 then return nil end
+	f[6] = tostring(int(hop, 0, 99) or 0)
+	return table.concat(f, ";")
+end
+
 -- what (0.6.3): "f" the Group Finder (one reporter per server), "c" LFG chat (one per chat
 -- number), or both; older senders leave it out, which means both
 function P.reporting(groups, what)
@@ -428,6 +461,21 @@ function P.parse(msg)
 			end
 		end
 		return kind, { shard = shard, digest = digest, part = part, parts = parts, items = items }
+	elseif kind == "T1" then
+		local chan, digest = int(f[2], 0, 99999), int(f[3], 0, 2^31)
+		local part, parts, hop = int(f[4], 1, 99), int(f[5], 1, 99), int(f[6], 0, 99)
+		if not (chan and chan > 0 and digest and part and parts and hop and part <= parts) then return nil end
+		local items = {}
+		for e in (f[7] or ""):gmatch("[^~]+") do
+			local name, age, k, text = e:match("^([^%^]+)%^(%d+)%^([lt])%^(.+)$")
+			name, text = clean(name, P.NAME_LEN), clean(text, P.FEED_TEXT)
+			age = int(age, 0, 86400)
+			if name ~= "" and text ~= "" and age and #items < P.MAX_FEED then
+				items[#items + 1] = { leader = name, age = age, kind = k, text = text }
+			end
+		end
+		if #items == 0 then return nil end
+		return kind, { chan = chan, digest = digest, part = part, parts = parts, hop = hop, items = items }
 	elseif kind == "R1" then
 		return kind, { groups = int(f[2], 0, 999) or 0, what = (f[3] or ""):match("^[fc]+$") or "fc" }
 	elseif kind == "G1" then
