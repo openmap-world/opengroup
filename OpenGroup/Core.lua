@@ -1008,6 +1008,15 @@ function L.groupRows(rows, by)
 		g.rows[#g.rows + 1] = r
 		if (r.dist or 0) < g.dist then g.dist = r.dist end
 	end
+	-- within each activity: groups first, then solo players (keeping the sort order otherwise)
+	if by == "act" then
+		for _, g in ipairs(groups) do
+			local grp, solo = {}, {}
+			for _, r in ipairs(g.rows) do if r.kind == "player" then solo[#solo + 1] = r else grp[#grp + 1] = r end end
+			for _, r in ipairs(solo) do grp[#grp + 1] = r end
+			g.rows = grp
+		end
+	end
 	table.sort(groups, function(a, b)
 		if by == "shard" then return a.order < b.order end
 		if a.dist ~= b.dist then return a.dist < b.dist end

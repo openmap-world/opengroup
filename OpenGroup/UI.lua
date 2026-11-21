@@ -376,7 +376,7 @@ box:SetPoint("BOTTOMRIGHT", -24, 6)
 
 -- the column headers above the list: click one to sort by it, again to reverse, a third time for
 -- the default order (what suits you best first)
-browse.COL_LABELS = { cls = "", lvl = "Lvl", leader = "Leader", act = "Activity", levels = "Levels", size = "Size", needs = "Needs", where = "Where", age = "Age" }
+browse.COL_LABELS = { cls = "", lvl = "Lvl", leader = "Leader", act = "Activity", levels = "Levels", size = "Size", needs = "Roles", where = "Where", age = "Age" }
 browse.colHead = CreateFrame("Frame", nil, browse.content)
 browse.colHead:SetHeight(18)
 browse.colButtons = {}
@@ -587,7 +587,15 @@ local function buildRow(row)
 	row.note:SetTextColor(0.25, 1, 0.25)
 	row.rolesLabel = fs("GameFontHighlight")   -- the summons / queue icon in the Needs column
 	row.roles = {}
-	for i = 1, P.MAX_SPOTS do row.roles[i] = row:CreateTexture(nil, "ARTWORK") end
+	row.plus = {}
+	for i = 1, P.MAX_SPOTS do
+		row.roles[i] = row:CreateTexture(nil, "ARTWORK")
+		-- a group's icons are roles it still needs: a small green + on each
+		row.plus[i] = row:CreateFontString(nil, "OVERLAY", "GameFontGreenSmall")
+		row.plus[i]:SetPoint("CENTER", row.roles[i], "BOTTOMRIGHT", -1, 2)
+		row.plus[i]:SetText("+")
+		row.plus[i]:Hide()
+	end
 	row.askCheck = row:CreateTexture(nil, "OVERLAY")
 	row.askCheck:SetSize(14, 14)
 	row.askCheck:SetAtlas("groupfinder-icon-greencheckmark")
@@ -636,6 +644,12 @@ local function buildRow(row)
 		end
 		if r and r.min > 0 then GameTooltip:AddLine(("Levels %s"):format(r.min == r.max and r.min or (r.min .. " to " .. r.max)), .8, .8, .8) end
 		if l.note ~= "" then GameTooltip:AddLine(l.note, .25, 1, .25, true) end
+		-- the Roles column, in words: what a group still needs, what a solo player plays
+		if r and r.kind ~= "summon" and r.kind ~= "bgq" and (l.need or 0) > 0 then
+			local names = {}
+			for _, b in ipairs(ROLES) do if has(l.need, b) then names[#names + 1] = W.ROLE_NAME[b] end end
+			GameTooltip:AddLine((r.kind == "group" and "Looking for: " or "Queued as: ") .. table.concat(names, ", "), .8, .8, .8)
+		end
 		if l.size > 1 and type(l.spots) == "table" and #l.spots > 0 then
 			GameTooltip:AddLine(" ")
 			GameTooltip:AddLine(myFit(l.spots) and "Open spots (you fit one)" or "Open spots", 1, .82, 0)
@@ -695,6 +709,7 @@ end
 local function setListingShown(row, on)
 	for _, r in ipairs({ row.bg, row.name, row.level, row.act, row.levels, row.size, row.note, row.shard, row.rolesLabel, row.age }) do r:SetShown(on) end
 	for _, t in ipairs(row.roles) do t:SetShown(on) end
+	if not on then for _, p in ipairs(row.plus or {}) do p:Hide() end end
 	if not on then row.class:Hide() row.sel:Hide() row.askCheck:Hide() row.hl:SetAlpha(0) else row.hl:SetAlpha(0.5) end
 	row.head:SetShown(not on)
 	row.headSign:Hide() row.headBar2:SetShown(false)
@@ -757,8 +772,8 @@ local function fillRow(row, d)
 		or r.where == "mine" and (GREY .. "Your server|r") or (GOLD .. OpenGroup_Nearby.whereText(l.shard) .. "|r")) .. (l.unconfirmed and (GREY .. " ?|r") or "")
 		.. (r.gf and (GREY .. " GF|r") or ""))
 	if r.chatPost then row.shard:SetText(GOLD .. "LFG " .. l.shard .. "|r") end
-	-- Needs: one icon per open spot (the class where one is set), else the role bits; groups show
-	-- what they want, players the roles they play
+	-- Roles: groups show what they still need (one icon per open spot, the class where one is set,
+	-- each with a green +); solo players the roles they play (plain icons)
 	local icons = {}
 	local spots = (l.size > 1 and type(l.spots) == "table" and #l.spots > 0) and l.spots or nil
 	if spots then
@@ -772,8 +787,10 @@ local function fillRow(row, d)
 			W.spotIcon(t, ic.role, ic.class)
 			t:SetAlpha((not spots and d.match and not has(L.mine and L.mine.need or 0, ic.role)) and 0.3 or 1)
 			t:Show()
+			row.plus[k]:SetShown(r.kind == "group")
 		else
 			t:Hide()
+			row.plus[k]:Hide()
 		end
 	end
 	if summon or bgq then
