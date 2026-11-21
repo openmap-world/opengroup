@@ -1030,6 +1030,8 @@ end
 local function bindHistory()
 	if N.feedBound or type(OpenGroupDB) ~= "table" then return end
 	N.feedBound = true
+	-- (history saved by an earlier test build, with links it garbled or kept without names, is dropped once)
+	if OpenGroupDB.feedHistV ~= 2 then OpenGroupDB.feedHist = nil OpenGroupDB.feedHistV = 2 end
 	local saved = type(OpenGroupDB.feedHist) == "table" and OpenGroupDB.feedHist or {}
 	local t, keep = clock(), {}
 	for _, e in ipairs(saved) do
@@ -1110,7 +1112,11 @@ end
 -- back to real links: the game's own when it has the item, else one built from the token's name
 -- (the game fills the tooltip in on hover); unknown items are asked for, and the tab redraws
 local QUALITY_COLOUR = { [0] = "ff9d9d9d", "ffffffff", "ff1eff00", "ff0070dd", "ffa335ee", "ffff8000", "ffe6cc80" }
-local function spellName(id) local n = GetSpellInfo and GetSpellInfo(id) return n end
+local function spellName(id)
+	local n = GetSpellInfo and GetSpellInfo(id)
+	if not n and C_Spell and C_Spell.GetSpellName then local ok, v = pcall(C_Spell.GetSpellName, id) if ok then n = v end end
+	return n
+end
 local function parts(body)
 	local ids, rest = body:match("^([%-%d:]+)(.*)$")
 	if not ids then return nil end
@@ -1148,6 +1154,21 @@ function N.unpackLinks(text)
 	end)
 	return text
 end
+-- the colour the player's chat gives Trade / LookingForGroup (its channel number's ChatTypeInfo)
+function N.channelColour(kind)
+	local want = kind == "t" and "^trade" or "^lookingforgroup"
+	local list = { GetChannelList() }
+	for i = 1, #list, 3 do
+		local name = list[i + 1]
+		if type(name) == "string" and name:gsub("^%d+%.%s*", ""):lower():find(want) then
+			local info = ChatTypeInfo and ChatTypeInfo["CHANNEL" .. tostring(list[i])]
+			if info and info.r then return info.r, info.g, info.b end
+		end
+	end
+	local info = ChatTypeInfo and ChatTypeInfo.CHANNEL
+	if info and info.r then return info.r, info.g, info.b end
+	return 1, 0.75, 0.75
+end
 function N.firstItem(text) return tonumber((text or ""):match("{i(%d+)")) end
 -- what search looks at: the line with its links' names, lower case
 function N.searchText(e)
@@ -1169,8 +1190,15 @@ function N.feedKeep(text)
 end
 
 local function feedKey(leader, text) return L.short(leader) .. "\31" .. text end
+-- a line an older build garbled: a stray "cnIQ3:" colour code, or a link left as "[item 123]"
+function N.garbled(text)
+	return type(text) ~= "string" or text:find("cnIQ%d") ~= nil or text:find("%[item %d+%]") ~= nil or text:find("%[spell %d+%]") ~= nil
+end
 local function addLine(e)
 	bindHistory()
+	if N.garbled(e.text) then return e, false end
+	-- group posts are marked once (World chat highlights them and links them to Browse)
+	if e.group == nil then e.group = N.parse(N.unpackLinks(e.text)) ~= nil end
 	local x = feedIndex[e.key]
 	if x then
 		if e.got > x.got then x.got = e.got end
@@ -1386,7 +1414,7 @@ function N.feedReport()
 		local e = feedPending[i]
 		if (e.kind == "l" and doLFG) or (e.kind == "t" and doTrade) then
 			if #items < 60 then
-				items[#items + 1] = { leader = e.leader, age = math.max(0, t - e.got), got = e.got, kind = e.kind, chan = mine, text = e.text, key = e.key }
+				items[#items + 1] = { leader = e.leader, age = math.max(0, t - e.got), got = e.got, kind = e.kind, chan = mine, text = e.text, key = e.key, class = e.class }
 				if e.kind == "l" then nl = nl + 1 else nt = nt + 1 end
 			end
 		end
@@ -1419,8 +1447,8 @@ local function takeLines(items, relay, now)
 	for _, it in ipairs(items) do
 		if not L.isMe(it.leader) and not (L.ignored and L.ignored(it.leader)) then
 			local _, isNew = addLine({ key = feedKey(it.leader, it.text), chan = it.chan, kind = it.kind, leader = it.leader, text = it.text,
-				got = now - it.age, relay = relay, mine = (it.chan == mine) or nil })
-			fresh[#fresh + 1] = { leader = it.leader, age = it.age, got = now - it.age, kind = it.kind, chan = it.chan, text = it.text, new = isNew }
+				got = now - it.age, relay = relay, mine = (it.chan == mine) or nil, class = it.class })
+			fresh[#fresh + 1] = { leader = it.leader, age = it.age, got = now - it.age, kind = it.kind, chan = it.chan, text = it.text, new = isNew, class = it.class }
 			-- group posts from another number's LookingForGroup still show in Browse
 			if isNew and it.kind == "l" and it.chan ~= mine and it.age < 600 and not L.listings[it.leader] and not L.nearby[it.leader] then
 				local p = N.parse(N.unpackLinks(it.text))
@@ -1473,7 +1501,7 @@ L.onBacklogAsk = function(sender, d)
 	for i = #N.feed, 1, -1 do
 		local e = N.feed[i]
 		if t - e.got < BACKLOG_SPAN and (not d.since or e.got > d.since) and #items < math.min(d.max or BACKLOG_LINES, BACKLOG_LINES) then
-			items[#items + 1] = { leader = e.leader, age = t - e.got, kind = e.kind, chan = e.chan, text = e.text }
+			items[#items + 1] = { leader = e.leader, age = t - e.got, kind = e.kind, chan = e.chan, text = e.text, class = e.class }
 		end
 	end
 	if #items == 0 then return end

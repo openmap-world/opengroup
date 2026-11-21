@@ -269,6 +269,20 @@ function browse.pickedActivities()
 	table.sort(out)
 	return out
 end
+-- show this player's listing in Browse: selected, its section open, scrolled to; false if there's none
+function browse.focus(name)
+	name = L.short(name)
+	if not (L.listings[name] or L.nearby[name] or (L.remote and L.remote[name])) then return false end
+	selected = name
+	collapsed = {}
+	showPage("browse")
+	L.onChange()
+	local b = browse.box
+	if b and b.ScrollToElementDataByPredicate then
+		pcall(b.ScrollToElementDataByPredicate, b, function(d) return d.l and d.l.leader == name end, ScrollBoxConstants and ScrollBoxConstants.AlignCenter)
+	end
+	return true
+end
 function browse.setShow(kind)
 	db().showKind = kind
 	if browse.showBtn then browse.showBtn:Paint() end
@@ -427,6 +441,7 @@ browse.actLine.x:SetScript("OnClick", function() if browse.clearActivities then 
 browse.actLine:Hide()
 
 local box = CreateFrame("Frame", nil, browse.content, "WowScrollBoxList")
+browse.box = box
 box:SetPoint("TOPLEFT", 6, -24)
 box:SetPoint("BOTTOMRIGHT", -24, 6)
 
@@ -3885,11 +3900,22 @@ local chatPage = page("chat")
 			row.name = fs(104, 110, "GameFontNormalSmall")
 			row.text = fs(218, nil)
 			row.text:SetPoint("RIGHT", -6, 0)
+			-- a group post: a gold bar at the left and a small group icon before the line
+			row.gbar = row:CreateTexture(nil, "ARTWORK")
+			row.gbar:SetPoint("TOPLEFT", 0, -2) row.gbar:SetPoint("BOTTOMLEFT", 0, 2)
+			row.gbar:SetWidth(3)
+			row.gbar:SetColorTexture(1, 0.78, 0.2, 0.9)
+			row.gicon = row:CreateTexture(nil, "ARTWORK")
+			row.gicon:SetSize(14, 14)
+			row.gicon:SetPoint("RIGHT", row.text, "LEFT", -2, 0)
+			row.gicon:SetTexture("Interface\\Icons\\INV_Misc_GroupLooking")
 			row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 			row:SetScript("OnClick", function(self, button)
 				local x = self.e
 				if not x then return end
 				if button == "RightButton" then if browse.personMenu then browse.personMenu(self, x.leader, nil) end return end
+				-- a group post: to that group in Browse; anything else: whisper them
+				if x.group and browse.focus and browse.focus(x.leader) then return end
 				if browse.openTell then browse.openTell(x.leader, "") end
 			end)
 			row:SetScript("OnEnter", function(self)
@@ -3903,7 +3929,7 @@ local chatPage = page("chat")
 				GameTooltip:AddLine(Nb.unpackLinks(x.text), 1, 1, 1, true)
 				GameTooltip:AddLine((x.mine and "Your chat number" or ((x.kind == "t" and "Trade" or "LookingForGroup") .. ", " .. L.CHAN .. " " .. x.chan))
 					.. (x.relay and (", relayed by " .. x.relay) or ""), .6, .6, .6, true)
-				GameTooltip:AddLine("Click to whisper. Right-click for more.", 0, 1, 0)
+				GameTooltip:AddLine(x.group and "Click to see this group in Browse. Right-click for more." or "Click to whisper. Right-click for more.", 0, 1, 0)
 				GameTooltip:Show()
 			end)
 			row:SetScript("OnLeave", GameTooltip_Hide)
@@ -3915,6 +3941,9 @@ local chatPage = page("chat")
 		row.where:SetText(label(e))
 		row.name:SetText(W.classColor(e.class) .. e.leader .. "|r")
 		row.text:SetText(Nb.unpackLinks(e.text))
+		row.text:SetTextColor(Nb.channelColour(e.kind))
+		row.gbar:SetShown(e.group == true)
+		row.gicon:SetShown(e.group == true)
 	end)
 	ScrollUtil.InitScrollBoxListWithScrollBar(list, bar, view)
 

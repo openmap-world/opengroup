@@ -365,7 +365,8 @@ function P.feedPack(origin, chan, digest, entries, lo, hi)
 		if #list >= P.FEED_MAX then break end
 		local name, text = feedClean(it.leader, P.NAME_LEN), feedClean(it.text, P.FEED_TEXT)
 		if name ~= "" and text ~= "" then
-			list[#list + 1] = ("%s^%d^%s^%d^%s"):format(name, int(it.age, 0, 86400) or 0, it.kind == "t" and "t" or "l", int(it.chan, 0, 99999) or 0, text)
+			list[#list + 1] = ("%s^%d^%s^%d^%s^%s"):format(name, int(it.age, 0, 86400) or 0, it.kind == "t" and "t" or "l", int(it.chan, 0, 99999) or 0,
+				P.CLASS_CODE and P.CLASS_CODE[it.class or ""] or "", text)
 		end
 	end
 	if #list == 0 then return {} end
@@ -386,11 +387,11 @@ function P.feedUnpack(packed)
 	if not text then return nil end
 	local items = {}
 	for e in text:gmatch("[^~]+") do
-		local name, age, k, chan, t = e:match("^([^%^]+)%^(%d+)%^([lt])%^(%d+)%^(.+)$")
+		local name, age, k, chan, cls, t = e:match("^([^%^]+)%^(%d+)%^([lt])%^(%d+)%^(%a*)%^(.+)$")
 		name, t = clean(name, P.NAME_LEN), clean(t, P.FEED_TEXT)
 		age, chan = int(age, 0, 86400), int(chan, 0, 99999)
 		if name ~= "" and t ~= "" and age and chan and #items < P.FEED_MAX then
-			items[#items + 1] = { leader = name, age = age, kind = k, chan = chan, text = t }
+			items[#items + 1] = { leader = name, age = age, kind = k, chan = chan, text = t, class = P.CODE_CLASS and P.CODE_CLASS[cls or ""] or nil }
 		end
 	end
 	return items

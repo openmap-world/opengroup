@@ -984,5 +984,31 @@ Bh.pickActivity(31, true) Bh.pickActivity(30, false)
 assert(#Bh.pickedActivities() == 0, "clicking the only one again shows everything")
 OpenGroup.listings["Grp G"], OpenGroup.listings["Solo S"] = nil, nil
 print("show and pick ok")
+-- World chat: garbled old lines kept out, the class travels, group posts link to Browse
+local Nx, Px = OpenGroup_Nearby, OpenGroup_Proto
+for _, bad in ipairs({ "WTS cnIQ3:[item 16712] 30g", "WTS cnIQ3:[item 16712]\\", "300BS WTS cnIQ2:[item 7969] 1.5g", "WTS [item 16712] 30g", "LF [spell 13637]" }) do
+  assert(Nx.garbled(bad), "garbled: " .. bad)
+  local _, isNew = Nx.addFeedLine({ key = "Bad B\31" .. bad, chan = 56, kind = "t", leader = "Bad B", text = bad, got = CLOCK })
+  assert(not isNew, "kept out: " .. bad)
+end
+assert(not Nx.garbled("WTS {i16712=Shadowcraft Gloves#3} 30g"), "a good line isn't")
+local pk = Px.feedPack("Rep R", 47, 4242, { { leader = "Cls C", age = 1, kind = "t", chan = 47, class = "PALADIN", text = "WTS {i12360=Arcanite Bar#2} 4g" } })
+local pcs = {} for _, m in ipairs(pk) do local _, d = Px.parse(m) pcs[d.part] = d.piece end
+local un = Px.feedUnpack(table.concat(pcs))
+assert(un[1].class == "PALADIN", "the poster's class travels with the line")
+ChatTypeInfo = { CHANNEL2 = { r = 1, g = 0.7, b = 0.6 } }
+GetChannelList = function() return 2, "Trade 47", false end
+local cr, cg = Nx.channelColour("t")
+assert(cr == 1 and cg == 0.7, "Trade lines in the player's Trade colour")
+GetChannelList = function() return 1, "Trade 47", false end
+local _, gnew = Nx.addFeedLine({ key = "Lfm Q\31LFM BRD need heals", chan = 56, kind = "l", leader = "Lfm Q", text = "LFM BRD need heals", got = CLOCK })
+local gl
+for _, e in ipairs(Nx.feed) do if e.leader == "Lfm Q" then gl = e end end
+assert(gl and gl.group == true, "a group post is marked")
+OpenGroup.remote["Lfm Q"] = { leader = "Lfm Q", src = "remotechat", shard = 56, size = 2, need = 2, acts = {30}, level = 0, got = CLOCK, seq = 0, hops = 0, price = 0, quest = 0, title = "", note = "" }
+assert(OpenGroup_UI.browse.focus("Lfm Q") and OpenGroupDB.tab == "browse", "clicking it shows that group in Browse")
+assert(not OpenGroup_UI.browse.focus("Nobody N"), "no listing: no switch")
+OpenGroup.remote["Lfm Q"] = nil
+print("world chat fixes ok")
 print("smoke OK")
 ''')
