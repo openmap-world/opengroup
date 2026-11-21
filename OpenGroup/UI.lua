@@ -3799,8 +3799,8 @@ SlashCmdList.OPENGROUP = function(msg)
 		local Nf = OpenGroup_Nearby
 		if Nf and Nf.feed then
 			local st = Nf.stats
-			L.print(("World chat: %d lines kept; sent %d, received %d, passed on %d, left out by the budget %d, backlogs answered %d; in Trade: %s; sharing LFG %s, Trade %s"):format(
-				#Nf.feed, st.feedOut or 0, st.feedIn or 0, st.feedFwd or 0, st.feedDropped or 0, st.backlogs or 0,
+			L.print(("World chat: %d lines kept; sent %d, received %d, passed on %d, left out by the budget %d, backlogs answered %d, repairs asked %d, resent after someone left %d; in Trade: %s; sharing LFG %s, Trade %s"):format(
+				#Nf.feed, st.feedOut or 0, st.feedIn or 0, st.feedFwd or 0, st.feedDropped or 0, st.backlogs or 0, st.repairs or 0, st.failovers or 0,
 				Nf.inTrade() and "yes" or "no", Nf.shareChat() and "on" or "off", Nf.shareTrade() and "on" or "off"))
 		end
 		local found = {}

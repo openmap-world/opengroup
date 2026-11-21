@@ -397,7 +397,10 @@ function P.feedHop(msg, hop)
 	return table.concat(f, ";")
 end
 -- "send me the last hour": B1;<max lines>
-function P.backlogAsk(max) return ("B1;%d"):format(int(max, 1, 500) or 100) end
+-- since (a time() value, optional): only lines newer than that (the periodic repair)
+function P.backlogAsk(max, since)
+	return ("B1;%d"):format(int(max, 1, 500) or 100) .. (since and (";" .. (int(since, 0, 2^31) or 0)) or "")
+end
 
 -- what (0.6.3): "f" the Group Finder (one reporter per server), "c" LFG chat (one per chat
 -- number), or both; older senders leave it out, which means both
@@ -637,7 +640,7 @@ function P.parse(msg)
 		return kind, { origin = origin, chan = chan, digest = digest, part = part, parts = parts, hop = hop, piece = piece,
 			lo = lo ~= "" and lo or nil, hi = hi ~= "" and hi or nil }
 	elseif kind == "B1" then
-		return kind, { max = int(f[2], 1, 500) or 100 }
+		return kind, { max = int(f[2], 1, 500) or 100, since = int(f[3], 0, 2^31) }
 	elseif kind == "R1" then
 		return kind, { groups = int(f[2], 0, 999) or 0, what = (f[3] or ""):match("^[fct]+$") or "fc" }
 	elseif kind == "G1" then

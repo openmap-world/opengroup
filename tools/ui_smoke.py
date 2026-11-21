@@ -799,6 +799,24 @@ for _, x in ipairs(sends) do if x.m:sub(1, 2) == "T1" then fw[x.to] = true end e
 assert(#Nw.feed == 3 and fw["Bea B"] and fw["Fay F"] and not fw["Abe A"] and not fw["Cid C"], "kept, and passed down the tree to our two children")
 local _, d1 = Pw.parse((function() for _, x in ipairs(sends) do if x.to == "Bea B" then return x.m end end end)())
 assert(d1.lo == "Bea B" and d1.hi == "Fay F", "each child gets its half of the names")
+-- Bea logs off: the game says so, and what went to her goes to the halves of her range (Cid, Eve)
+sends = {}
+Nw.feedTokensReset()
+OpenGroup.onPeerGone("Bea B")
+local after = {}
+for _, x in ipairs(sends) do if x.m:sub(1, 2) == "T1" then after[x.to] = true end end
+assert(after["Cid C"] and after["Eve E"] and not after["Bea B"] and not after["Fay F"], "lines to a player who left go to whoever takes their place")
+local saveP = OpenGroup.peers["Bea B"]
+OpenGroup.peers["Bea B"] = nil
+-- the periodic repair: a random OpenGroup user, asked for the lines of the last 21 minutes
+sends = {}
+Nw.REPAIR_EVERY = 600
+for i = 1, 3 do CLOCK = CLOCK + 700 Nw.feedRepairTick() end
+local ask
+for _, x in ipairs(sends) do if x.m:sub(1, 2) == "B1" then ask = x.m end end
+local _, da = Pw.parse(ask or "")
+assert(da and da.since and da.since >= CLOCK - 1260 and da.since <= CLOCK - 1200, "repair asks for what's newer than 21 minutes ago")
+OpenGroup.peers["Bea B"] = saveP
 assert(OpenGroup.remote["Lfm L"] and OpenGroup.remote["Lfm L"].src == "remotechat", "its group posts still feed Browse")
 sends = {}
 for _, m in ipairs(inMsgs) do OpenGroup.receive(m, "Bea B") end

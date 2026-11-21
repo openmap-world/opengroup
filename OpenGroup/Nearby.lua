@@ -1235,25 +1235,27 @@ local function packFor(items, nTargets, digest)
 	return msgs, keep
 end
 
-function N.feedFlush()
-	flushAt = nil
-	if #outbox == 0 then return 0 end
-	local items, t = outbox, clock()
-	local lo, hi = outLo or nil, outHi or nil
-	if outOpen then lo, hi = nil, nil end
-	outbox, outboxKeys, outLo, outHi, outOpen = {}, {}, nil, nil, false
-	local kids = N.feedChildren(lo, hi)
-	-- a whole-tree batch, but we know someone whose name sorts before ours: it's the root, not us
-	if not lo and not hi then
-		local known = N.feedKnown()
-		local me = L.me() and L.short(L.me())
-		if known[1] and me and known[1] < me then kids = { { name = known[1] } } end
+-- what we last sent each player, for a few seconds: if the game says they've gone (logged off),
+-- the same lines go to whoever takes their place
+local lastSent = {}
+
+-- send a batch for the names in (lo, hi); kids: who to (default: the two halves of the range,
+-- or up to the root for a whole-tree batch when we aren't it)
+local function sendBatch(items, lo, hi, kids)
+	local t = clock()
+	if not kids then
+		kids = N.feedChildren(lo, hi)
+		-- a whole-tree batch, but we know someone whose name sorts before ours: it's the root, not us
+		if not lo and not hi then
+			local known = N.feedKnown()
+			local me = L.me() and L.short(L.me())
+			if known[1] and me and known[1] < me then kids = { { name = known[1], open = true } } end
+		end
 	end
 	if #kids == 0 then return 0 end
 	for _, it in ipairs(items) do it.age = math.max(0, t - (it.got or t)) end
 	local sent = 0
 	local digest = math.random(1, 2^30)
-	local msgsFor = {}
 	-- what fits the budget for both children
 	local _, keep = packFor(items, #kids, digest)
 	for _, k in ipairs(kids) do
@@ -1261,9 +1263,53 @@ function N.feedFlush()
 		for _, m in ipairs(msgs) do
 			if N.feedSpend() then L.send(k.name, m, true) sent = sent + 1 N.stats.feedFwd = N.stats.feedFwd + 1 end
 		end
+		-- everything sent them in the last 30 seconds, in case they turn out to be gone
+		local ls = lastSent[k.name]
+		if not ls or t - ls.at > 30 or ls.lo ~= k.lo or ls.hi ~= k.hi or ls.open ~= k.open then
+			ls = { items = {}, keys = {}, lo = k.lo, hi = k.hi, open = k.open }
+			lastSent[k.name] = ls
+		end
+		ls.at = t
+		for _, it in ipairs(keep) do
+			local key = feedKey(it.leader, it.text)
+			if not ls.keys[key] then ls.keys[key] = true ls.items[#ls.items + 1] = it end
+		end
 	end
 	return sent
 end
+
+function N.feedFlush()
+	flushAt = nil
+	if #outbox == 0 then return 0 end
+	local items = outbox
+	local lo, hi = outLo or nil, outHi or nil
+	if outOpen then lo, hi = nil, nil end
+	outbox, outboxKeys, outLo, outHi, outOpen = {}, {}, nil, nil, false
+	return sendBatch(items, lo, hi)
+end
+
+-- the game says `name` isn't playing (Core.lua's "No player named" check): if we sent them World
+-- chat in the last 30 seconds, it goes to whoever takes their place in the tree instead (the
+-- next root, or the two halves of their range)
+function N.feedPeerGone(name)
+	local short = L.short(name)
+	local ls = lastSent[short]
+	lastSent[short] = nil
+	if not ls or clock() - ls.at > 30 then return 0 end
+	N.stats.failovers = (N.stats.failovers or 0) + 1
+	if ls.open then
+		local known = N.feedKnown()
+		local me = L.me() and L.short(L.me())
+		if not known[1] or (me and me < known[1]) then
+			-- we're the root now
+			for _, it in ipairs(ls.items) do outboxKeys[feedKey(it.leader, it.text)] = true end
+			return sendBatch(ls.items, nil, nil, N.feedChildren(nil, nil))
+		end
+		return sendBatch(ls.items, nil, nil)
+	end
+	return sendBatch(ls.items, ls.lo, ls.hi, N.feedChildren(ls.lo, ls.hi))
+end
+L.onPeerGone = function(name) pcall(N.feedPeerGone, name) end
 
 -- every 20 seconds (on the same beat for everyone): our number's new lines into the tree, if we report
 function N.feedReport()
@@ -1299,10 +1345,7 @@ function N.feedReport()
 	local me = L.short(me)
 	local root = known[1]
 	if not root or me < root then widen(nil, nil) queueOut(items) return true end
-	local msgs = select(1, packFor(items, 1, math.random(1, 2^30)))
-	local sent = 0
-	for _, m in ipairs(msgs) do if N.feedSpend() then L.send(root, m, true) sent = sent + 1 end end
-	return sent > 0
+	return sendBatch(items, nil, nil, { { name = root, open = true } }) > 0
 end
 
 -- lines arriving (relayed, or a backlog): kept, deduplicated, ignored players left out; returns
@@ -1361,12 +1404,12 @@ end
 -- the last hour, for someone who just logged in (B1), at most once every 2 minutes
 L.onBacklogAsk = function(sender, d)
 	local t = clock()
-	if t - backlogAnsweredAt < 120 then return end
+	if t - backlogAnsweredAt < 60 then return end
 	bindHistory()
 	local items = {}
 	for i = #N.feed, 1, -1 do
 		local e = N.feed[i]
-		if t - e.got < BACKLOG_SPAN and #items < math.min(d.max or BACKLOG_LINES, BACKLOG_LINES) then
+		if t - e.got < BACKLOG_SPAN and (not d.since or e.got > d.since) and #items < math.min(d.max or BACKLOG_LINES, BACKLOG_LINES) then
 			items[#items + 1] = { leader = e.leader, age = t - e.got, kind = e.kind, chan = e.chan, text = e.text }
 		end
 	end
@@ -1380,6 +1423,22 @@ L.onBacklogAsk = function(sender, d)
 	-- one hop past the limit: a backlog isn't passed on
 	for _, m in ipairs(msgs) do L.send(sender, P.feedHop(m, P.FEED_HOPS) or m, true) end
 	N.stats.backlogs = N.stats.backlogs + 1
+end
+-- Repair: every 10 minutes, ask a random OpenGroup user (0.6.3 on) for the lines of the last 21
+-- minutes. Players the relay tree missed (nobody above them knew them) catch up this way.
+N.REPAIR_EVERY = 600
+local repairAt
+function N.feedRepairTick()
+	local t = clock()
+	repairAt = repairAt or (t + math.random(60, N.REPAIR_EVERY))
+	if t < repairAt then return false end
+	repairAt = t + N.REPAIR_EVERY
+	local list = N.feedKnown()
+	if #list == 0 then return false end
+	local to = list[math.random(1, #list)]
+	L.send(to, P.backlogAsk(BACKLOG_LINES, t - 2 * N.REPAIR_EVERY - 60), true)
+	N.stats.repairs = (N.stats.repairs or 0) + 1
+	return true
 end
 -- ask one OpenGroup user (0.6.3 on) for the last hour; at most every 10 minutes
 function N.askBacklog()
@@ -1418,6 +1477,7 @@ if C_Timer and C_Timer.NewTicker then
 		if r ~= lastRound then lastRound = r pcall(N.feedReport) end
 	end)
 	C_Timer.NewTicker(30, function() pcall(N.expireFeed) end)
+	C_Timer.NewTicker(15, function() pcall(N.feedRepairTick) end)
 	-- a minute after login, fill in the last hour
 	if C_Timer.After then C_Timer.After(60, function() pcall(N.askBacklog) end) end
 end

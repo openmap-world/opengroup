@@ -687,7 +687,11 @@ local function hideOurMisses(_, _, text)
 	if not at or now() - at > 30 then return false end
 	L.stats.missed = L.stats.missed + 1
 	for peer, p in pairs(L.peers) do
-		if L.short(peer) == short then p.off = now() end
+		if L.short(peer) == short then
+			p.off = now()
+			-- every miss: World chat resends whatever went to them since the last one
+			if L.onPeerGone then pcall(L.onPeerGone, peer) end
+		end
 	end
 	return true
 end
