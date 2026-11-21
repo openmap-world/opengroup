@@ -319,6 +319,7 @@ function browse.buildFilter(root)
 		L.onChange()
 	end
 	if a.CreateButton then
+		a:CreateButton(GOLD .. "Pick several (press and drag)...|r", function() if browse.openActivityPicker then browse.openActivityPicker() end end)
 		a:CreateButton("Suggested for my level", function() pickAll(function(_, id) local i = A.get(id) return i and (i.min or 0) > 0 and lvl >= i.min - 3 and lvl <= (i.max or 60) + 3 end) end)
 		a:CreateButton("All dungeons", function() pickAll(function(cat) return W.kindOf(cat.name) == "dungeon" end) end)
 		a:CreateButton("All raids", function() pickAll(function(cat) return W.kindOf(cat.name) == "raid" end) end)
@@ -4354,6 +4355,149 @@ end)()
 	end
 	browse.cardPaint = paint
 	browse.newCard = card
+end)()
+
+-- --------------------------------------------------------------------------------------------
+-- The activity picker: Browse's Activity filter as a checklist that stays open. Press a box and
+-- drag over others to give them all the same state (ticked or not, whichever the first press
+-- made it). Quick picks at the top; grouped by category, level-coloured like the menu. Closes on
+-- Esc or a click outside.
+
+;(function()
+	local panel = CreateFrame("Frame", "OpenGroupActivityPicker", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
+	panel:SetSize(300, 420)
+	panel:SetFrameStrata("DIALOG")
+	panel:EnableMouse(true)
+	panel:SetClampedToScreen(true)
+	if panel.SetBackdrop then
+		panel:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+			tile = true, tileSize = 16, edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+		panel:SetBackdropColor(0.06, 0.05, 0.03, 0.97)
+		panel:SetBackdropBorderColor(0.62, 0.48, 0.22, 1)
+	end
+	panel:Hide()
+	tinsert(UISpecialFrames, "OpenGroupActivityPicker")
+	local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+	title:SetPoint("TOPLEFT", 12, -10)
+	title:SetText("Activities")
+	local hint = panel:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+	hint:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -3)
+	hint:SetText("Press a box and drag to tick several.")
+	local close = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
+	close:SetPoint("TOPRIGHT", 0, 0)
+
+	local lvl = UnitLevel and UnitLevel("player") or 60
+	local function pickAll(test)
+		for k in pairs(filterActs) do filterActs[k] = nil end
+		for _, cat in ipairs(A.load()) do for _, id in ipairs(cat.acts) do if test(cat, id) then filterActs[id] = true end end end
+		L.onChange()
+		panel.refresh()
+	end
+	local quick = {
+		{ "For my level", function() pickAll(function(_, id) local i = A.get(id) return i and (i.min or 0) > 0 and lvl >= i.min - 3 and lvl <= (i.max or 60) + 3 end) end },
+		{ "Dungeons", function() pickAll(function(cat) return W.kindOf(cat.name) == "dungeon" end) end },
+		{ "Raids", function() pickAll(function(cat) return W.kindOf(cat.name) == "raid" end) end },
+		{ "Clear", function() pickAll(function() return false end) end },
+	}
+	local prev
+	for i, q in ipairs(quick) do
+		local b = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+		b:SetSize(i == 1 and 86 or 64, 20)
+		if prev then b:SetPoint("LEFT", prev, "RIGHT", 4, 0) else b:SetPoint("TOPLEFT", 10, -46) end
+		b:SetText(q[1])
+		b:SetScript("OnClick", q[2])
+		prev = b
+	end
+
+	-- painting: the state the first press gave, while the button is held
+	local painting
+	local function setOne(id, on)
+		filterActs[id] = on or nil
+	end
+	local list = CreateFrame("Frame", nil, panel, "WowScrollBoxList")
+	list:SetPoint("TOPLEFT", 8, -72)
+	list:SetPoint("BOTTOMRIGHT", -26, 10)
+	local sbar = CreateFrame("EventFrame", nil, panel, "MinimalScrollBar")
+	sbar:SetPoint("TOPLEFT", list, "TOPRIGHT", 6, 0)
+	sbar:SetPoint("BOTTOMLEFT", list, "BOTTOMRIGHT", 6, 0)
+	local view = CreateScrollBoxListLinearView()
+	view:SetElementExtent(20)
+	view:SetElementInitializer("Button", function(row, e)
+		if not row.built then
+			row.check = row:CreateTexture(nil, "ARTWORK")
+			row.check:SetSize(16, 16)
+			row.check:SetPoint("LEFT", 4, 0)
+			row.label = row:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+			row.label:SetPoint("LEFT", 24, 0)
+			row.label:SetPoint("RIGHT", -4, 0)
+			row.label:SetJustifyH("LEFT")
+			row.label:SetWordWrap(false)
+			row.hl = row:CreateTexture(nil, "HIGHLIGHT")
+			row.hl:SetAllPoints()
+			row.hl:SetColorTexture(1, 0.9, 0.6, 0.08)
+			row:SetScript("OnMouseDown", function(self, button)
+				if button ~= "LeftButton" or not self.e or not self.e.id then return end
+				painting = not filterActs[self.e.id]
+				setOne(self.e.id, painting)
+				panel.paintRow(self)
+				L.onChange()
+			end)
+			row:SetScript("OnEnter", function(self)
+				if painting ~= nil and self.e and self.e.id and IsMouseButtonDown and IsMouseButtonDown("LeftButton") then
+					setOne(self.e.id, painting)
+					panel.paintRow(self)
+					L.onChange()
+				end
+			end)
+			row:SetScript("OnMouseUp", function() painting = nil end)
+			row.built = true
+		end
+		row.e = e
+		panel.paintRow(row)
+	end)
+	ScrollUtil.InitScrollBoxListWithScrollBar(list, sbar, view)
+	function panel.paintRow(row)
+		local e = row.e
+		if not e then return end
+		if e.title then
+			row.check:Hide()
+			row.label:SetPoint("LEFT", 4, 0)
+			row.label:SetText(GOLD .. e.title .. "|r")
+			return
+		end
+		row.label:SetPoint("LEFT", 24, 0)
+		row.check:Show()
+		row.check:SetTexture(filterActs[e.id] and "Interface\\Buttons\\UI-CheckBox-Check" or "Interface\\Buttons\\UI-CheckBox-Up")
+		row.label:SetText(W.levelText(e.id, lvl))
+	end
+	function panel.items()
+		local out = {}
+		for _, cat in ipairs(A.load()) do
+			local kind = W.kindOf(cat.name)
+			if #cat.acts > 0 and (kind == "dungeon" or kind == "raid" or kind == "custom" or kind == "battle") then
+				out[#out + 1] = { title = cat.name }
+				for _, id in ipairs(cat.acts) do out[#out + 1] = { id = id } end
+			end
+		end
+		return out
+	end
+	function panel.refresh()
+		lvl = UnitLevel and UnitLevel("player") or lvl
+		list:SetDataProvider(CreateDataProvider(panel.items()), ScrollBoxConstants.RetainScrollPosition)
+	end
+	-- the button released anywhere ends a drag; a click outside closes
+	panel:SetScript("OnUpdate", function() if painting ~= nil and IsMouseButtonDown and not IsMouseButtonDown("LeftButton") then painting = nil end end)
+	pcall(panel.RegisterEvent, panel, "GLOBAL_MOUSE_DOWN")
+	panel:SetScript("OnEvent", function(self) if self:IsShown() and not self:IsMouseOver() then self:Hide() end end)
+
+	function browse.openActivityPicker(anchor)
+		panel:ClearAllPoints()
+		panel:SetPoint("TOPLEFT", anchor or browse.filterBtn, "BOTTOMLEFT", 0, -4)
+		panel.refresh()
+		panel:Show()
+	end
+	browse.activityPicker = panel
+	browse.pickerPaint = function(id, on) setOne(id, on) end
 end)()
 
 local sideTabs = {}

@@ -488,7 +488,7 @@ OpenGroup.whisperEvent(nil, "CHAT_MSG_WHISPER_INFORM", typed, "Who 4")
 assert(F.asked["Who 4"] and F.nextTarget().fullName == "Who 5", "asked once it went out; next moves on")
 date = date or function() return "12:00" end
 local frow = CreateFrame("Button") frow.built = false
-INITS[#INITS - 2](frow, F.results[4])
+INITS[#INITS - 3](frow, F.results[4])
 print("find row badge:", frow.badge:GetText())
 ChatFrame_SendTell = nil ChatEdit_GetActiveWindow = nil
 -- servers: a Trade number whose Group Finder we nearly all had is our server
@@ -870,7 +870,7 @@ OpenGroupDB.chatShowTrade = false
 assert(#OpenGroup_UI.chat.rows() == 1 and OpenGroup_UI.chat.rows()[1].kind == "l", "the Trade filter")
 OpenGroupDB.chatShowTrade = nil
 local crow = CreateFrame("Button") crow.built = false
-INITS[#INITS - 1](crow, chatRows[1])
+INITS[#INITS - 2](crow, chatRows[1])
 crow.scripts.OnEnter(crow)
 GetChannelList = function() return 1, "Trade 47", false end
 print("world chat ok")
@@ -929,13 +929,13 @@ local lineWithCard
 for _, e in ipairs(PROVIDED) do if e.pair then for _, d in ipairs(e.pair) do if d.l and d.l.leader == "Card C" then lineWithCard = e end end end end
 assert(lineWithCard, "the cards view lists the groups in pairs")
 local line = CreateFrame("Frame") line.built = false
-INITS[#INITS](line, lineWithCard)
+INITS[#INITS - 1](line, lineWithCard)
 for _, c in ipairs(line.cards) do if c.d and c.d.l.leader == "Card C" then
   c.scripts.OnEnter(c)
   assert(c.words[1].text == "Heal" and c.words[2].text == "Tank" and c.words[4].text:find("need dps", 1, true) and c.ask.text == "Ask to join", "slots spelled out, Ask to join")
 end end
 local hline = CreateFrame("Frame") hline.built = false
-INITS[#INITS](hline, { header = "x", text = "Blackrock Depths", count = 2 })
+INITS[#INITS - 1](hline, { header = "x", text = "Blackrock Depths", count = 2 })
 Bc.setCards(false)
 assert(OpenGroupDB.browseView == nil, "back to rows, remembered")
 OpenGroup.listings["Card C"] = nil
@@ -1010,5 +1010,24 @@ assert(OpenGroup_UI.browse.focus("Lfm Q") and OpenGroupDB.tab == "browse", "clic
 assert(not OpenGroup_UI.browse.focus("Nobody N"), "no listing: no switch")
 OpenGroup.remote["Lfm Q"] = nil
 print("world chat fixes ok")
+-- the activity picker: press a box and drag, the same state paints the others
+local Bp = OpenGroup_UI.browse
+Bp.clearActivities()
+Bp.openActivityPicker()
+local pinit = INITS[#INITS]
+local rows = {}
+for i, id in ipairs({ 30, 31, 32 }) do local r = CreateFrame("Button") r.built = false pinit(r, { id = id }) rows[i] = r end
+IsMouseButtonDown = function() return true end
+rows[1].scripts.OnMouseDown(rows[1], "LeftButton")
+rows[2].scripts.OnEnter(rows[2]) rows[3].scripts.OnEnter(rows[3])
+assert(#Bp.pickedActivities() == 3, "press and drag ticks them all")
+rows[3].scripts.OnMouseUp(rows[3])
+rows[2].scripts.OnMouseDown(rows[2], "LeftButton")
+rows[3].scripts.OnEnter(rows[3])
+assert(#Bp.pickedActivities() == 1 and Bp.pickedActivities()[1] == 30, "pressing a ticked one unticks, and drags that")
+IsMouseButtonDown = function() return false end
+local trow = CreateFrame("Button") trow.built = false pinit(trow, { title = "Dungeons" })
+Bp.clearActivities()
+print("picker ok")
 print("smoke OK")
 ''')
