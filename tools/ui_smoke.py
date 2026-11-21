@@ -273,35 +273,30 @@ AI.start()
 for i = 1, 6 do CLOCK = CLOCK + 3 AI.tick() end
 print("extras invited:", #INVITED)
 assert(#INVITED == 4, "2 open spots x 2")
--- one click-only call per click: Refresh searches the Group Finder and skips /who; a tab click only /who
+-- searches only from their own buttons, never piggybacked on other clicks, never in combat
 WHO, SEARCHES = 0, 0
 C_FriendList.SendWho = function() WHO = WHO + 1 end
 C_LFGList.Search = function() SEARCHES = SEARCHES + 1 end
 OpenGroup_Nearby.noSearch = nil
 CLOCK = CLOCK + 1000
 OpenGroup.scan.last, OpenGroup.scan.inFlight = nil, nil
-OpenGroup.scan.auto(true, true)
-print("refresh click: searches", SEARCHES, "who", WHO)
-assert(SEARCHES == 1 and WHO == 0, "one restricted call per click")
-OpenGroup.scan.auto(false)
-assert(SEARCHES == 1 and WHO == 1, "a tab click runs /who only")
--- an opening click with stale Group Finder results searches once (no /who); with fresh ones, /who
-WHO, SEARCHES = 0, 0
-CLOCK = CLOCK + 1000
-OpenGroup.scan.last, OpenGroup.scan.inFlight = nil, nil
-OpenGroup_Nearby.resultsAt = nil
-OpenGroup.scan.auto(true)
-assert(SEARCHES == 1 and WHO == 0, "stale: the opening click searches, no /who")
-OpenGroup_Nearby.resultsAt = GetTime()
-CLOCK = CLOCK + 10
-OpenGroup.scan.auto(true)
-assert(SEARCHES == 1 and WHO == 1, "fresh: no search, the /who instead")
+OpenGroup.scan.auto(false) OpenGroup.scan.auto(true)
+assert(SEARCHES == 0 and WHO == 0, "a tab, the minimap button or opening the window searches nothing")
+OpenGroup_UI.browse.searchClick()
+assert(SEARCHES == 1 and WHO == 0, "Search Group Finder: one Group Finder search, no /who")
+InCombatLockdown = function() return true end
+CLOCK = CLOCK + 100
+OpenGroup_UI.browse.searchClick()
+OpenGroup.scan.inFlight = nil
+OpenGroup.scan.click()
+assert(SEARCHES == 1 and WHO == 0, "nothing in combat")
+assert(not OpenGroup_Nearby.gameList({ 30 }, 4, true), "no game listing in combat")
+assert(select(2, OpenGroup_Nearby.post("LFM BRD")) ~= nil, "no LFG post in combat")
+InCombatLockdown = function() return false end
+OpenGroup.scan.inFlight = nil
 -- after a refusal only a direct Search click may try again
 OpenGroup_Nearby.noSearch = true
 CLOCK = CLOCK + 10
-OpenGroup.scan.last = CLOCK
-OpenGroup.scan.auto(true, true)
-assert(SEARCHES == 1, "background attempts stay off after a refusal")
 OpenGroup_UI.browse.searchClick()
 print("explicit search after a refusal:", SEARCHES)
 assert(SEARCHES == 2, "a direct click on Search tries again")

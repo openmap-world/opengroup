@@ -378,6 +378,9 @@ W.kindOf = kindOf
 
 local harvested
 local function harvest()
+	-- (0.6.3: off. Reading every frame's text and atlas reached values the game keeps secret, and
+	-- the taint log named it; the known atlas names above are enough.)
+	do return {} end
 	if harvested then return harvested end
 	-- only from the game's Group Finder once the player has opened it (we never load it ourselves:
 	-- loading Blizzard's protected UI from an addon risks taint)

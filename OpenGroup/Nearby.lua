@@ -463,6 +463,7 @@ N.searchAt = nil   -- GetTime() of our last search call, to tell a blocked searc
 -- a search earlier this session, and even with the game's own window open. catID: search this
 -- category (the one Browse is filtered to) instead of taking turns.
 function N.search(force, explicit, catID)
+	if InCombatLockdown and InCombatLockdown() then return false end
 	if not enabled() or (N.noSearch and not explicit) or not (C_LFGList and C_LFGList.Search) then return false end
 	local t = GetTime()
 	if t - lastSearch < (force and 5 or SEARCH_GAP) then return false end
@@ -500,6 +501,7 @@ function N.lfgChannel()
 end
 
 function N.post(text)
+	if InCombatLockdown and InCombatLockdown() then return false, "Not posted in LookingForGroup during combat; click Post in LFG after the fight." end
 	local id = N.lfgChannel()
 	if not id then return false, "You're not in the LookingForGroup channel, so nothing was posted there." end
 	if C_ChatInfo and C_ChatInfo.InChatMessagingLockdown then
@@ -911,6 +913,10 @@ end
 -- (solo: the roles you play). Returns true when the call was made.
 function N.gameList(acts, need, solo)
 	if not N.gameListOn() or not N.canGameList() then return false end
+	if InCombatLockdown and InCombatLockdown() then
+		L.print("not listed in the game's Group Finder during combat (your OpenGroup listing is out). Click Update Listing after the fight.")
+		return false
+	end
 	local ids = N.gameActs(acts)
 	if #ids == 0 then return false end
 	-- solo: the game lists you with the roles saved in its window; set them only when they differ
@@ -936,6 +942,10 @@ function N.gameList(acts, need, solo)
 end
 -- from a click (Leave / Delist): take the game's listing down, if there is one
 function N.gameUnlist()
+	if InCombatLockdown and InCombatLockdown() then
+		if N.game.ours then L.print("still in the game's Group Finder: take it down after combat (Leave again, or its own window).") end
+		return false
+	end
 	-- only a listing OpenGroup made: one the player made in the game's window is theirs to remove
 	if not N.game.ours or not (C_LFGList and C_LFGList.RemoveListing) or not N.canGameList() then return false end
 	local has = false

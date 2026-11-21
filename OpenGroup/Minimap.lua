@@ -70,7 +70,6 @@ b:SetScript("OnUpdate", function(_, el)
 end)
 
 b:SetScript("OnClick", function(_, button)
-	if L.scan and L.scan.auto then L.scan.auto(true) end
 	if not OpenGroup_UI then return end
 	if button == "RightButton" then OpenGroup_UI.toggle("network") else OpenGroup_UI.toggle() end
 end)

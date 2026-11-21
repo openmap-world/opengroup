@@ -48,6 +48,7 @@ end
 -- call from a button click only
 function S.click()
 	if S.inFlight then return end
+	if InCombatLockdown and InCombatLockdown() then UIErrorsFrame:AddMessage("OpenGroup searches after combat.", 1, .82, 0) return end
 	S.last = GetTime()
 	local list = bands()
 	S.band = S.band % #list + 1
@@ -73,14 +74,14 @@ end
 -- search may run (Refresh and the minimap button only); force: Refresh's shorter wait.
 -- explicit: the player clicked Search (may retry after a refusal); catID: the category to search.
 -- Without force, the Group Finder is only searched when its results are stale (2 minutes).
+-- (0.6.3: no more searches piggybacked on other clicks. The game's taint log named the /who run
+-- from a tab click; /who now only runs from Settings' Search now and Find players' Search, and the
+-- Group Finder search only from Browse's Search Group Finder button.)
 function S.auto(fromClick, force, explicit, catID)
-	-- in combat: no searches (the window still opens; a blocked search would pause them all session)
 	if InCombatLockdown and InCombatLockdown() then return false end
+	if not explicit then return false end
 	local N = OpenGroup_Nearby
-	if fromClick and N and (force or N.stale()) and N.search(force, explicit, catID) then return true end
-	if S.noWho or S.inFlight or (S.last and GetTime() - S.last < 45) then return false end
-	S.click()
-	return true
+	return (fromClick and N and N.search(force, explicit, catID)) and true or false
 end
 
 -- the player's own /who searches: the names in them are worth a hello too (a few per search)
@@ -99,6 +100,7 @@ end
 -- probed. The game's /who window is kept shut the same way as for the background search.
 function S.find(query, onResults)
 	if S.inFlight then return false end
+	if InCombatLockdown and InCombatLockdown() then return false end
 	S.last = GetTime()
 	hush()
 	if C_FriendList.SetWhoToUi then pcall(C_FriendList.SetWhoToUi, true) end

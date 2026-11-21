@@ -65,7 +65,6 @@ function T.attach()
 		if x and y then ui.win:ClearAllPoints() ui.win:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x, y) end
 		ui.win:Show()
 		if ui.win.Raise then ui.win:Raise() end
-		if L.scan and L.scan.auto then L.scan.auto(true) end
 	end)
 	-- below the lowest tab already on the window's right edge (the game's and other addons'), so
 	-- it never covers one. Anchored to the window itself at an offset worked out from where the

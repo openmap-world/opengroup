@@ -188,13 +188,13 @@ local function sideTab(key, icon, tip, prev)
 		t.Icon:SetSize(30, 30)
 		if t.SetFillToInterior then t:SetFillToInterior(true) end
 		t.tooltipText = tip
-		t:SetCustomOnMouseUpHandler(function(_, button, up) if button == "LeftButton" and up then showPage(key) L.scan.auto(false) end end)
+		t:SetCustomOnMouseUpHandler(function(_, button, up) if button == "LeftButton" and up then showPage(key) end end)
 	else
 		t = CreateFrame("CheckButton", nil, win)
 		t:SetSize(40, 40)
 		local tex = t:CreateTexture(nil, "ARTWORK") tex:SetAllPoints() tex:SetTexture(icon)
 		t:SetCheckedTexture("Interface\\Buttons\\CheckButtonHilight", "ADD")
-		t:SetScript("OnClick", function() showPage(key) L.scan.auto(false) end)
+		t:SetScript("OnClick", function() showPage(key) end)
 		t:SetScript("OnEnter", function(self) GameTooltip:SetOwner(self, "ANCHOR_RIGHT") GameTooltip:SetText(tip) GameTooltip:Show() end)
 		t:SetScript("OnLeave", GameTooltip_Hide)
 	end
@@ -1085,6 +1085,11 @@ countText:SetPoint("CENTER")
 local function selectedListing() return selected and (L.listings[selected] or L.nearby[selected] or (L.remote and L.remote[selected])) end
 
 local function openWhisper(name, text)
+	-- in combat, leave the chat box alone: OpenGroup's own Whispers tab instead
+	if InCombatLockdown and InCombatLockdown() then
+		if browse.openWhisper then browse.openWhisper(name) end
+		return
+	end
 	local tell = ChatFrame_SendTell or (ChatFrameUtil and ChatFrameUtil.SendTell)
 	if tell then
 		tell(name)
@@ -1311,7 +1316,7 @@ function browse.refresh()
 	elseif total > 0 then empty:SetText("No groups match your filters.") empty:Show()
 	elseif peers == 0 then
 		empty:SetText("No OpenGroup players found yet.\n\nOpenGroup looks for them as you use it (friends, guild, group, " ..
-			"whispers, and a /who search now and then). Click " .. GOLD .. "Refresh|r to look again. Anything they list, on any server, shows up here.")
+			"whispers, players around you). Settings' " .. GOLD .. "Search now|r runs a /who for more. Anything they list, on any server, shows up here.")
 		empty:Show()
 	else
 		empty:SetText(("Nobody is listed right now.\n\n%d OpenGroup %s known. List your own group in the %sList a group|r tab."):format(peers, peers == 1 and "player" or "players", GOLD))
@@ -4741,6 +4746,6 @@ SlashCmdList.OPENGROUP = function(msg)
 		L.print("tile pictures: " .. table.concat(tiles, ", "))
 	else
 		win:SetShown(not win:IsShown())
-		if win:IsShown() then L.scan.auto(false) end
+		-- (no search on opening: the game only allows them from a button, and never in combat)
 	end
 end
