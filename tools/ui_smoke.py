@@ -1029,5 +1029,30 @@ IsMouseButtonDown = function() return false end
 local trow = CreateFrame("Button") trow.built = false pinit(trow, { title = "Dungeons" })
 Bp.clearActivities()
 print("picker ok")
+-- Find players: several classes, one per click, the players add up
+local Ff = OpenGroup_UI.find
+Ff.clear()
+Ff.classes = { "WARRIOR", "DRUID" } Ff.turn = 0
+OpenGroup.scan.inFlight = nil
+Ff.paint()
+Ff.searchClick()
+local cb1 = OpenGroup.scan.inFlight and OpenGroup.scan.inFlight.find
+assert(cb1, "a /who went out")
+OpenGroup.scan.inFlight = nil
+cb1({ { fullName = "War A", level = 58, classStr = "Warrior", filename = "WARRIOR" }, { fullName = "War B", level = 58, classStr = "Warrior", filename = "WARRIOR" } }, 60)
+Ff.searchClick()
+local cb2 = OpenGroup.scan.inFlight and OpenGroup.scan.inFlight.find
+OpenGroup.scan.inFlight = nil
+cb2({ { fullName = "Dru A", level = 58, classStr = "Druid", filename = "DRUID" }, { fullName = "War A", level = 58, classStr = "Warrior", filename = "WARRIOR" } }, 2)
+print("find notice:", Ff.notice:GetText())
+assert(#Ff.results == 3 and #Ff.covered == 2, "both classes in one list, no repeats")
+assert(Ff.notice:GetText():find("Warrior", 1, true) and Ff.notice:GetText():find("50+", 1, true) and Ff.notice:GetText():find("Druid 2", 1, true), "a summary per class")
+Ff.min:SetText("40")
+OpenGroup.scan.inFlight = nil
+Ff.searchClick()
+OpenGroup.scan.inFlight = nil
+assert(#Ff.results == 0, "new levels: a new list")
+Ff.clear()
+print("find several ok")
 print("smoke OK")
 ''')

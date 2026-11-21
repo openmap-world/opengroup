@@ -3621,8 +3621,13 @@ local finder = page("find")
 	F.name = box(110, "name (optional)")
 	F.name:SetPoint("LEFT", here, "RIGHT", 10, 0)
 	local search = CreateFrame("Button", nil, F.header, "UIPanelButtonTemplate")
-	search:SetSize(96, 24)
+	search:SetSize(130, 24)
 	search:SetPoint("TOPRIGHT", -4, -4)
+	local clearBtn = CreateFrame("Button", nil, F.header, "UIPanelButtonTemplate")
+	clearBtn:SetSize(60, 24)
+	clearBtn:SetPoint("TOPRIGHT", search, "BOTTOMRIGHT", 0, -4)
+	clearBtn:SetText("Clear")
+	clearBtn:SetScript("OnClick", function() if F.clear then F.clear() end end)
 	search:SetText("Search")
 	F.preview = F.header:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
 	F.preview:SetPoint("TOPLEFT", F.zone, "BOTTOMLEFT", -6, -8)
@@ -3759,13 +3764,25 @@ local finder = page("find")
 
 	function F.paint()
 		classDD:SetLabel(#F.classes == 0 and "Any class" or #F.classes == 1 and W.className(F.classes[1]) or (#F.classes .. " classes"))
+		-- the button names the class this click will look for
+		if #F.classes > 1 then
+			search:SetText(("%s (%d of %d)"):format(W.className(F.nextClass()), (F.turn % #F.classes) + 1, #F.classes))
+		else
+			search:SetText("Search")
+		end
 		local q = F.query()
 		F.preview:SetText("/who " .. (q ~= "" and q or "(everyone)") .. (#F.classes > 1 and (GREY .. "   (one class per Search)|r") or ""))
 		local shown = {}
 		for _, info in ipairs(F.results) do if not L.ignored(L.short(info.fullName)) then shown[#shown + 1] = info end end
 		list:SetDataProvider(CreateDataProvider(shown), ScrollBoxConstants.RetainScrollPosition)
 		local full = F.total >= 50
+		-- per class searched so far: "Warrior 50+ (narrow it), Druid 12"
+		local parts = {}
+		for _, c in ipairs(F.covered) do
+			parts[#parts + 1] = (c.class and W.className(c.class) or "Everyone") .. " " .. (c.n >= 50 and (GOLD .. "50+ (narrow it)|r") or tostring(c.n))
+		end
 		F.notice:SetText(F.searching and (GREY .. "Searching...|r")
+			or (#parts > 1 and (GREY .. #shown .. " players:|r " .. table.concat(parts, ", ")))
 			or full and (GOLD .. "50 shown (the most /who gives). Narrow the search:|r")
 			or (#shown > 0 and (GREY .. #shown .. " found|r") or ""))
 		narrowZone:SetShown(full and not F.searching) narrowLvl:SetShown(full and not F.searching)
@@ -3775,17 +3792,40 @@ local finder = page("find")
 		nextBtn:SetText(nxt and "Whisper next" or "Nobody left")
 	end
 
+	-- A /who looks for one class, and the game allows one per click: with several classes ticked,
+	-- each Search click takes the next one and its players join the list (no repeats). Changing
+	-- the levels, zone or name starts a new list; so does Clear.
+	F.covered = {}           -- { { class, n (how many matched), shown } } in search order
+	function F.base()
+		local cls = {}
+		for _, c in ipairs(F.classes) do cls[#cls + 1] = c end
+		table.sort(cls)
+		return table.concat({ F.min:GetText(), F.max:GetText(), F.zone:GetText(), F.name:GetText(), table.concat(cls, ",") }, "|")
+	end
+	function F.clear() F.results, F.total, F.covered, F.lastBase = {}, 0, {}, nil F.paint() end
+	function F.nextClass() return #F.classes > 0 and F.classes[(F.turn % #F.classes) + 1] or nil end
+	function F.merge(list2, n, cls)
+		local seen = {}
+		for _, info in ipairs(F.results) do seen[info.fullName] = true end
+		for _, info in ipairs(list2 or {}) do
+			if not seen[info.fullName] then seen[info.fullName] = true F.results[#F.results + 1] = info end
+		end
+		F.covered[#F.covered + 1] = { class = cls, n = n or 0, shown = #(list2 or {}) }
+		F.total = n or 0
+	end
 	function F.searchClick()
 		if InCombatLockdown and InCombatLockdown() then UIErrorsFrame:AddMessage("Not in combat.", 1, .1, .1) return end
+		local base = F.base()
+		if base ~= F.lastBase then F.results, F.covered, F.lastBase = {}, {}, base end
 		local q = F.query()
+		local cls = F.nextClass()
 		F.searching = true
 		-- one click-only call: this click's /who (no Group Finder search alongside)
 		local ok = L.scan.find(q, function(list2, n)
 			F.searching = false
-			F.results = list2 or {}
-			F.total = n or 0
+			F.merge(list2, n, cls)
 			-- quietly ask who runs OpenGroup (within the usual hello limits)
-			for _, info in ipairs(F.results) do L.probe(L.short(info.fullName), "find") end
+			for _, info in ipairs(list2 or {}) do L.probe(L.short(info.fullName), "find") end
 			F.paint()
 		end)
 		if not ok then F.searching = false UIErrorsFrame:AddMessage("A search is already running.", 1, .82, 0) end
@@ -4576,6 +4616,18 @@ SlashCmdList.OPENGROUP = function(msg)
 		L.delist()
 	elseif cmd == "bug" or cmd == "report" then
 		L.showReport()
+	elseif cmd == "who2" then
+		-- debug: does one /who with two classes return both? (from this command's keypress)
+		local q = 'c-"Warrior" c-"Mage" 58-60'
+		L.print("/who " .. q .. " ...")
+		local ok = L.scan.find(q, function(list, n)
+			local seen = {}
+			for _, info in ipairs(list or {}) do local c = info.classStr or info.filename or "?" seen[c] = (seen[c] or 0) + 1 end
+			local parts = {}
+			for c, k in pairs(seen) do parts[#parts + 1] = c .. " " .. k end
+			L.print(("/who two classes: %d matched; came back: %s"):format(n or 0, #parts > 0 and table.concat(parts, ", ") or "nobody"))
+		end)
+		if not ok then L.print("a /who is already running, try again in a moment.") end
 	elseif cmd == "chatlog" then
 		-- debug, off by default: keep the last 300 LookingForGroup / Trade lines and what the parser
 		-- made of them in SavedVariables (OpenGroupDB.chatlog), to tune it against real chat
