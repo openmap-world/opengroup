@@ -149,3 +149,7 @@ none | is the server down?
 none | recruiting healers for MC raids, apply on our discord
 none | selling DM tribute runs 10g
 none | WTS Strat UD carry 15g
+# the newer named colour codes in links (|cnIQ3: = quality 3)
+g blackrock depths h * | LFM BRD need heals, |cnIQ3:|Hitem:11810::::::::60:::::::|h[Force of Will]|h|r reserved
+p * d 1 | mage LFG, have |cnIQ4:|Hitem:12590::::::::60:::::::|h[Felstriker]|h|r
+none | WTS |cnIQ3:|Hitem:16712::::::::60:::::::|h[Shadowcraft Gloves]|h|r 50g

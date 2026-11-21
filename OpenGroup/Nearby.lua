@@ -118,7 +118,7 @@ local function anyPlain(t, list) for _, p in ipairs(list) do if t:find(p, 1, tru
 
 -- (spaces by hand: %s can take bytes of other alphabets, e.g. the 0xA0 inside a Cyrillic letter)
 local function clean(text)
-	return (text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|H.-|h(.-)|h", "%1"):gsub("|T.-|t", "")
+	return (text:gsub("|cn[^:|]*:", ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|H.-|h(.-)|h", "%1"):gsub("|T.-|t", "")
 		:gsub("{.-}", ""):gsub("[%[%]]", " "):gsub("[ \t\r\n]+", " "):gsub("^ ", ""):gsub(" $", ""))
 end
 
@@ -1017,7 +1017,9 @@ local function bindHistory()
 	local saved = type(OpenGroupDB.feedHist) == "table" and OpenGroupDB.feedHist or {}
 	local t, keep = clock(), {}
 	for _, e in ipairs(saved) do
-		if type(e) == "table" and type(e.key) == "string" and type(e.got) == "number" and t - e.got < FEED_KEEP then keep[#keep + 1] = e end
+		-- (lines an earlier test build garbled, with a stray "cnIQ3:", are dropped)
+		if type(e) == "table" and type(e.key) == "string" and type(e.got) == "number" and t - e.got < FEED_KEEP
+			and not (type(e.text) == "string" and e.text:find("cnIQ%d:")) then keep[#keep + 1] = e end
 	end
 	for _, e in ipairs(N.feed) do keep[#keep + 1] = e end
 	N.feed, feedIndex = {}, {}
@@ -1047,40 +1049,83 @@ function N.feedTokensLeft()
 	return feedTokens
 end
 
--- links -> {i<item>[:enchant:suffix]}, {e<enchant>}, {s<spell>}; colours and textures dropped
-function N.packLinks(text)
-	text = text:gsub("|c%x%x%x%x%x%x%x%x(|H.-|h.-|h)|r", "%1")
-	text = text:gsub("|Hitem:([%-%d:]+)|h%[.-%]|h", function(payload)
+-- links -> tokens that keep the name and quality, so a line reads right even before the game has
+-- the item: {i<item>[:enchant:suffix]=Name#q}, {e<enchant>=Name}, {s<spell>=Name}. Colours go,
+-- both the old |cffrrggbb and the newer named |cn<name>: kind (|cnIQ3: = quality 3).
+local QUALITY_HEX = { ["9d9d9d"] = 0, ["ffffff"] = 1, ["1eff00"] = 2, ["0070dd"] = 3, ["a335ee"] = 4, ["ff8000"] = 5, ["e6cc80"] = 6 }
+local function qualityOf(colour)
+	if not colour then return nil end
+	local q = colour:match("^|cnIQ(%d):")
+	if q then return tonumber(q) end
+	local hex = colour:match("^|c%x%x(%x%x%x%x%x%x)")
+	return hex and QUALITY_HEX[hex:lower()] or nil
+end
+local function safeName(n) return (n or ""):gsub("[{}=#~%^|;]", " ") end
+local function token(kind, payload, name, colour)
+	name = safeName(name)
+	if kind == "item" then
 		local f = {}
 		for v in (payload .. ":"):gmatch("([^:]*):") do f[#f + 1] = v end
 		local id, ench, suffix = tonumber(f[1]), tonumber(f[2]) or 0, tonumber(f[7]) or 0
-		if not id then return "" end
-		if ench ~= 0 or suffix ~= 0 then return ("{i%d:%d:%d}"):format(id, ench, suffix) end
-		return ("{i%d}"):format(id)
-	end)
-	text = text:gsub("|Henchant:(%d+)|h%[.-%]|h", "{e%1}")
-	text = text:gsub("|Hspell:(%d+)[^|]*|h%[.-%]|h", "{s%1}")
-	text = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|H.-|h(.-)|h", "%1"):gsub("|T.-|t", "")
+		if not id then return name end
+		local q = qualityOf(colour)
+		return ("{i%d%s%s%s}"):format(id, (ench ~= 0 or suffix ~= 0) and (":" .. ench .. ":" .. suffix) or "",
+			name ~= "" and ("=" .. name) or "", q and ("#" .. q) or "")
+	elseif kind == "enchant" or kind == "spell" then
+		local id = tonumber(payload:match("^(%d+)"))
+		if not id then return name end
+		return ("{%s%d%s}"):format(kind == "enchant" and "e" or "s", id, name ~= "" and ("=" .. name) or "")
+	end
+	return name
+end
+-- strip colour codes of both kinds
+function N.stripColours(text)
+	return (text:gsub("|cn[^:|]*:", ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
+function N.packLinks(text)
+	-- coloured links: the colour tells the quality
+	text = text:gsub("(|c[^|]*)|H(%a+):([^|]*)|h%[(.-)%]|h|r", function(colour, kind, payload, name) return token(kind, payload, name, colour) end)
+	text = text:gsub("|H(%a+):([^|]*)|h%[(.-)%]|h", function(kind, payload, name) return token(kind, payload, name, nil) end)
+	text = N.stripColours(text):gsub("|H.-|h(.-)|h", "%1"):gsub("|T.-|t", ""):gsub("|", "")
 	return text
 end
--- back to real links, as far as the game knows them yet (unknown items are asked for)
+-- back to real links: the game's own when it has the item, else one built from the token's name
+-- (the game fills the tooltip in on hover); unknown items are asked for, and the tab redraws
+local QUALITY_COLOUR = { [0] = "ff9d9d9d", "ffffffff", "ff1eff00", "ff0070dd", "ffa335ee", "ffff8000", "ffe6cc80" }
 local function spellName(id) local n = GetSpellInfo and GetSpellInfo(id) return n end
+local function parts(body)
+	local ids, rest = body:match("^([%-%d:]+)(.*)$")
+	if not ids then return nil end
+	local name = rest:match("=([^#]*)")
+	local q = tonumber(rest:match("#(%d)"))
+	return ids, (name and name ~= "") and name or nil, q
+end
 function N.unpackLinks(text)
-	text = text:gsub("{i(%d+):?(%-?%d*):?(%-?%d*)}", function(id, ench, suffix)
+	text = text:gsub("{i([^}]*)}", function(body)
+		local ids, name, q = parts(body)
+		if not ids then return "" end
+		local id, ench, suffix = ids:match("^(%d+):?(%-?%d*):?(%-?%d*)$")
 		id = tonumber(id)
+		if not id then return name or "" end
 		local str = ("item:%d:%s:0:0:0:0:%s"):format(id, ench ~= "" and ench or "0", suffix ~= "" and suffix or "0")
 		local link = GetItemInfo and select(2, GetItemInfo(str))
-		if not link and GetItemInfo then link = select(2, GetItemInfo(id)) end
+		if not link and GetItemInfo and ench == "" then link = select(2, GetItemInfo(id)) end
 		if link then return link end
 		if C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, id) end
-		return "[item " .. id .. "]"
+		return ("|c%s|H%s|h[%s]|h|r"):format(QUALITY_COLOUR[q or 1] or "ffffffff", str, name or ("item " .. id))
 	end)
-	text = text:gsub("{e(%d+)}", function(id)
-		local n = spellName(tonumber(id))
+	text = text:gsub("{e([^}]*)}", function(body)
+		local ids, name = parts(body)
+		local id = tonumber(ids or "")
+		if not id then return name or "" end
+		local n = spellName(id) or name
 		return n and ("|cffffd000|Henchant:" .. id .. "|h[" .. n .. "]|h|r") or ("[enchant " .. id .. "]")
 	end)
-	text = text:gsub("{s(%d+)}", function(id)
-		local n = spellName(tonumber(id))
+	text = text:gsub("{s([^}]*)}", function(body)
+		local ids, name = parts(body)
+		local id = tonumber((ids or ""):match("^(%d+)") or "")
+		if not id then return name or "" end
+		local n = spellName(id) or name
 		return n and ("|cff71d5ff|Hspell:" .. id .. "|h[" .. n .. "]|h|r") or ("[spell " .. id .. "]")
 	end)
 	return text
@@ -1088,7 +1133,7 @@ end
 function N.firstItem(text) return tonumber((text or ""):match("{i(%d+)")) end
 -- what search looks at: the line with its links' names, lower case
 function N.searchText(e)
-	local t = N.unpackLinks(e.text):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|H.-|h(.-)|h", "%1")
+	local t = N.stripColours(N.unpackLinks(e.text)):gsub("|H.-|h(.-)|h", "%1")
 	return (e.leader .. " " .. t):lower()
 end
 
@@ -1484,5 +1529,5 @@ end
 if CreateFrame then
 	local ff = CreateFrame("Frame")
 	pcall(ff.RegisterEvent, ff, "GET_ITEM_INFO_RECEIVED")
-	ff:SetScript("OnEvent", function() N.feedEpoch = (N.feedEpoch or 0) + 1 end)
+	ff:SetScript("OnEvent", function() N.feedEpoch = (N.feedEpoch or 0) + 1 changed() end)
 end

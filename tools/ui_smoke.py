@@ -720,12 +720,19 @@ local Nw, Pw = OpenGroup_Nearby, OpenGroup_Proto
 assert(Nw.feedKeep("WTS [Arcanite Bar] 4g each") and Nw.feedKeep("LFM BRD need heals") and Nw.feedKeep("LF enchanter for crusader, tips"), "ads, groups, crafters kept")
 assert(not Nw.feedKeep("lol anyone seen my dog") and not Nw.feedKeep("cheap gold at www.goldsite.com") and not Nw.feedKeep("WTS BRD boost 10g") and not Nw.feedKeep("WTS strat carry"), "chatter, gold sellers, boosts dropped")
 local linked = "WTS |cff1eff00|Hitem:12360::::::::60:::::::|h[Arcanite Bar]|h|r 4g"
-assert(Nw.packLinks(linked) == "WTS {i12360} 4g", "item links travel as IDs")
-assert(Nw.packLinks("LF |cffffd000|Henchant:20034|h[Enchant Weapon - Crusader]|h|r") == "LF {e20034}", "enchant links too")
-assert(Nw.packLinks("WTS |cff1eff00|Hitem:10282:0:0:0:0:0:1199:0|h[Ebon Bracers of the Eagle]|h|r") == "WTS {i10282:0:1199}", "item suffixes kept")
+assert(Nw.packLinks(linked) == "WTS {i12360=Arcanite Bar#2} 4g", "item links travel as IDs, with name and quality")
+assert(Nw.packLinks("LF |cffffd000|Henchant:20034|h[Enchant Weapon - Crusader]|h|r") == "LF {e20034=Enchant Weapon - Crusader}", "enchant links too")
+assert(Nw.packLinks("WTS |cff1eff00|Hitem:10282:0:0:0:0:0:1199:0|h[Ebon Bracers of the Eagle]|h|r") == "WTS {i10282:0:1199=Ebon Bracers of the Eagle#2}", "item suffixes kept")
+-- the newer named colour codes (|cnIQ3:) the game uses now
+local named = "WTS |cnIQ3:|Hitem:16712::::::::60:::::::|h[Shadowcraft Gloves]|h|r"
+assert(Nw.packLinks(named) == "WTS {i16712=Shadowcraft Gloves#3}", "named colours: no stray cnIQ3, quality kept")
+assert(Nw.packLinks("WTS |cnIQ3:[Shadowcraft Gloves]|r") == "WTS [Shadowcraft Gloves]", "a named colour on plain text goes too")
+assert(Nw.parse("LFM BRD |cnIQ3:need heals|r") and Nw.parse("LFM BRD |cnIQ3:need heals|r").need == 2, "the chat parser strips them too")
+local shown = Nw.unpackLinks("WTS {i16712=Shadowcraft Gloves#3}")
+assert(shown:find("[Shadowcraft Gloves]", 1, true) and shown:find("|cff0070dd", 1, true) and shown:find("|Hitem:16712:", 1, true), "an item the game hasn't loaded still shows its name, a real link and its colour")
 GetItemInfo = function(id) if id == 12360 or tostring(id):find("^item:12360:") then return "Arcanite Bar", "|cff1eff00|Hitem:12360|h[Arcanite Bar]|h|r" end end
 GetSpellInfo = function(id) if id == 20034 then return "Enchant Weapon - Crusader" end end
-assert(Nw.unpackLinks("WTS {i12360} 4g"):find("Arcanite Bar", 1, true) and Nw.unpackLinks("{i999}") == "[item 999]", "rebuilt on arrival")
+assert(Nw.unpackLinks("WTS {i12360} 4g"):find("Arcanite Bar", 1, true) and Nw.unpackLinks("{i999}"):find("[item 999]", 1, true), "rebuilt on arrival")
 -- compression: a batch packs and unpacks to the same lines
 local batch = {}
 for i = 1, 30 do batch[i] = { leader = "Seller S" .. i, age = i, kind = i % 3 == 0 and "l" or "t", chan = 47, text = (i % 3 == 0) and "LFM BRD need heals" or ("WTS {i" .. (12000 + i) .. "} " .. i .. "g each, whisper me") } end
@@ -764,7 +771,7 @@ local function linesTo(name)
 end
 local toRoot = linesTo("Abe A")
 print("World chat root gets:", toRoot and #toRoot)
-assert(toRoot and #toRoot == 2 and toRoot[1].kind == "l" and toRoot[2].text:find("{i12360}", 1, true), "LFG first, then Trade with item IDs; chatter left out")
+assert(toRoot and #toRoot == 2 and toRoot[1].kind == "l" and toRoot[2].text:find("{i12360=Arcanite Bar", 1, true), "LFG first, then Trade with item IDs; chatter left out")
 assert(not linesTo("Bea B") and not linesTo("Old O") and not linesTo("Hom H"), "only to the root")
 local claim
 for _, x in ipairs(sends) do if x.to == "Hom H" and x.m:sub(1, 2) == "R1" then claim = x.m end end

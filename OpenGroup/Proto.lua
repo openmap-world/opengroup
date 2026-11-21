@@ -206,7 +206,7 @@ end
 -- t = Trade; links travel as {i<item>}, {e<enchant>}, {s<spell>}), LZ-compressed against a
 -- built-in dictionary of what trade chat says a lot, then written in 91 safe characters (no
 -- ; | ~ or control bytes). Pure Lua 5.1, no bit library.
-P.FEED_TEXT, P.FEED_HOPS, P.FEED_MAX = 160, 6, 120
+P.FEED_TEXT, P.FEED_HOPS, P.FEED_MAX = 240, 6, 120
 
 -- what trade and LFG chat say all the time: matches against this cost three bytes
 local DICT = table.concat({

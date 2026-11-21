@@ -3520,6 +3520,8 @@ local chatPage = page("chat")
 ;(function()
 	local C = chatPage
 	local Nb = OpenGroup_Nearby
+	-- a short header: the search row and the status line, then the list
+	C.headerH = 52
 	C.search = ""
 	local function flag(key, default) local v = db()[key] if v == nil then return default end return v end
 
@@ -3551,7 +3553,7 @@ local chatPage = page("chat")
 	check("Trade", "chatShowTrade", 64)
 	check("Mine", "chatShowMine", 124, "Lines from your own chat number, which you also see in your chat window.")
 	C.status = C.header:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
-	C.status:SetPoint("TOPLEFT", box, "BOTTOMLEFT", -4, -10)
+	C.status:SetPoint("TOPLEFT", box, "BOTTOMLEFT", -4, -6)
 	C.status:SetPoint("RIGHT", C.header, "RIGHT", -8, 0)
 	C.status:SetJustifyH("LEFT")
 
