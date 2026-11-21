@@ -35,6 +35,10 @@ Nothing is posted in public chat unless you leave "Post in LFG chat" ticked.
 
 Recent LookingForGroup posts from your shard (the poster's name, the post and its age) are passed on to OpenGroup players on other shards, who are on the same realm and faction. Untick "Share LFG chat from my shard" on the Network tab to stop that.
 
+## Reporting a problem
+
+In game, open Settings and click Report a problem (or type /og bug). It gives you a link to copy into your browser that opens a report on GitHub with your version and game details filled in. No character names are included.
+
 ## Privacy
 
 OpenGroup only talks to other players who run it, through the game's hidden addon messages. It has no internet access and sends nothing anywhere else. What other users can see is listed above. Players on your ignore list are hidden everywhere in OpenGroup, and their messages are ignored.

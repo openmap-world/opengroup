@@ -874,5 +874,18 @@ INITS[#INITS](crow, chatRows[1])
 crow.scripts.OnEnter(crow)
 GetChannelList = function() return 1, "Trade 47", false end
 print("world chat ok")
+-- Report a problem: a link to the issue form with version and details, and no names in it
+OpenGroup.lastError = "Interface/AddOns/OpenGroup/Core.lua:12: oops"
+local url = OpenGroup.reportURL("bug")
+print("report link length:", #url)
+assert(url:find("template=from-game.yml", 1, true) and url:find("version=0.6.3", 1, true) and url:find("status=", 1, true), "the form, the version and the details")
+local details = OpenGroup.reportDetails()
+assert(details:find("Settings: share LFG chat", 1, true) and details:find("Last error: Interface/AddOns/OpenGroup/Core.lua:12: oops", 1, true), "details: settings and the last error")
+assert(not url:find("Ann", 1, true) and not details:find("Ann A", 1, true), "no character names")
+for n in pairs(OpenGroup.peers) do assert(not details:find(n, 1, true), "no player names") end
+assert(#url < 4000, "short enough for a browser")
+assert(OpenGroup.reportURL("idea"):find("template=feature.yml", 1, true), "the idea form")
+SlashCmdList.OPENGROUP("bug")
+print("report ok")
 print("smoke OK")
 ''')

@@ -3702,6 +3702,110 @@ local chatPage = page("chat")
 	-- (sharing your chat number's Trade lines is switched in Settings)
 end)()
 
+-- --------------------------------------------------------------------------------------------
+-- Report a problem: addons can't open a browser or send anything, so this shows a link to copy.
+-- It opens OpenGroup's issue form on GitHub with the version and the game details filled in
+-- (client, language, chat number, how many OpenGroup players you know, the settings, the last
+-- error). No character or player names go in it.
+
+;(function()
+	local REPO = "https://github.com/openmap-world/opengroup/issues/new"
+	local function enc(s)
+		return (tostring(s or ""):gsub("\n", "\r\n"):gsub("([^%w%-%.%_%~ ])", function(c) return ("%%%02X"):format(c:byte()) end):gsub(" ", "+"))
+	end
+	local function onOff(v) return v and "on" or "off" end
+	-- the game details, plain text, no names
+	function L.reportDetails()
+		local Nb = OpenGroup_Nearby
+		local version, build, _, toc = "?", "?", nil, "?"
+		if GetBuildInfo then version, build, _, toc = GetBuildInfo() end
+		local live, n = L.live(), 0
+		for _ in pairs(live) do n = n + 1 end
+		local err = L.lastError and tostring(L.lastError):gsub("[\r\n]+", " "):sub(1, 200) or "none"
+		local lines = {
+			("OpenGroup %s"):format(L.VERSION),
+			("Client %s, build %s, interface %s, language %s"):format(tostring(version), tostring(build), tostring(toc), GetLocale and GetLocale() or "?"),
+			("%s %s"):format(L.CHAN, L.shard() > 0 and tostring(L.shard()) or "unknown"),
+			("OpenGroup players known %d, heard from lately %d"):format(L.count(L.peers), n),
+			("Messages sent %d, received %d, refused %d, bad %d"):format(L.stats.sent or 0, L.stats.got or 0, L.stats.refused or 0, L.stats.bad or 0),
+			("Settings: share LFG chat %s, share Trade chat %s, list in the game's Group Finder %s, tell my party %s, hello to players around me %s, all languages %s"):format(
+				onOff(Nb and Nb.shareChat()), onOff(Nb and Nb.shareTrade()), onOff(db().gameList ~= false), onOff(db().tellParty ~= false),
+				onOff(db().nearHello ~= false), onOff(Nb and Nb.allLanguages())),
+			("World chat lines %d, in Trade %s"):format(Nb and Nb.feed and #Nb.feed or 0, onOff(Nb and Nb.inTrade and Nb.inTrade())),
+			("Last error: %s"):format(err),
+		}
+		return table.concat(lines, "\n")
+	end
+	function L.reportURL(kind)
+		if kind == "idea" then
+			return REPO .. "?template=feature.yml&version=" .. enc(L.VERSION)
+		end
+		return REPO .. "?template=from-game.yml&title=" .. enc("Problem in " .. L.VERSION .. ": ")
+			.. "&version=" .. enc(L.VERSION) .. "&status=" .. enc(L.reportDetails())
+	end
+
+	local frame
+	function L.showReport()
+		if not frame then
+			frame = CreateFrame("Frame", "OpenGroupReport", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
+			frame:SetSize(560, 190)
+			frame:SetPoint("CENTER")
+			frame:SetFrameStrata("DIALOG")
+			frame:EnableMouse(true)
+			frame:SetMovable(true)
+			frame:SetClampedToScreen(true)
+			frame:RegisterForDrag("LeftButton")
+			frame:SetScript("OnDragStart", frame.StartMoving)
+			frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+			if frame.SetBackdrop then
+				frame:SetBackdrop({ bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark", edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+					tile = true, tileSize = 32, edgeSize = 24, insets = { left = 6, right = 6, top = 6, bottom = 6 } })
+			end
+			tinsert(UISpecialFrames, "OpenGroupReport")
+			local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+			title:SetPoint("TOP", 0, -16)
+			title:SetText("Report a problem")
+			local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
+			close:SetPoint("TOPRIGHT", -4, -4)
+			local function field(label, y)
+				local fs = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+				fs:SetPoint("TOPLEFT", 20, y)
+				fs:SetText(label)
+				local box = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+				box:SetSize(510, 22)
+				box:SetPoint("TOPLEFT", 26, y - 18)
+				box:SetAutoFocus(false)
+				box:SetScript("OnEditFocusGained", function(self) self:HighlightText() end)
+				box:SetScript("OnEscapePressed", function() frame:Hide() end)
+				-- read only: typing puts the link back
+				box:SetScript("OnTextChanged", function(self, user) if user then self:SetText(self.value or "") self:HighlightText() end end)
+				return box
+			end
+			frame.bug = field("A problem: copy this link (Ctrl+C), then paste it in your browser", -48)
+			frame.idea = field("An idea:", -102)
+			local tip = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+			tip:SetPoint("BOTTOMLEFT", 20, 18)
+			tip:SetWidth(520)
+			tip:SetJustifyH("LEFT")
+			tip:SetText("The problem link fills in your version and game details (no character names). You need a GitHub account to post.")
+		end
+		frame.bug.value, frame.idea.value = L.reportURL("bug"), L.reportURL("idea")
+		frame.bug:SetText(frame.bug.value)
+		frame.idea:SetText(frame.idea.value)
+		frame:Show()
+		frame.bug:SetFocus()
+		frame.bug:HighlightText()
+	end
+
+	-- on the Settings bar, at the right
+	local btn = CreateFrame("Button", nil, net.content, "UIPanelButtonTemplate")
+	btn:SetSize(140, 20)
+	btn:SetPoint("RIGHT", net.settingsBar, "RIGHT", -8, 0)
+	btn:SetFrameLevel(net.settingsBar:GetFrameLevel() + 2)
+	btn:SetText("Report a problem")
+	btn:SetScript("OnClick", function() L.showReport() end)
+end)()
+
 local sideTabs = {}
 sideTabs[1] = sideTab("browse", "Interface\\Icons\\INV_Misc_GroupLooking", "Browse groups")
 sideTabs[2] = sideTab("list", "Interface\\Icons\\INV_Misc_GroupNeedMore", "List a group", sideTabs[1])
@@ -3763,6 +3867,8 @@ SlashCmdList.OPENGROUP = function(msg)
 		L.post(rest, "", 0)
 	elseif cmd == "delist" then
 		L.delist()
+	elseif cmd == "bug" or cmd == "report" then
+		L.showReport()
 	elseif cmd == "chatlog" then
 		-- debug, off by default: keep the last 300 LookingForGroup / Trade lines and what the parser
 		-- made of them in SavedVariables (OpenGroupDB.chatlog), to tune it against real chat

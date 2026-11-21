@@ -1,0 +1,35 @@
+name: Problem report (from the game)
+description: Something isn't working in OpenGroup. In game, Settings > Report a problem (or /og bug) gives you this form with the details filled in.
+labels: ["bug", "from-game"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected and what happened instead. A screenshot helps.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: OpenGroup version
+      description: Filled in from the game. You can also see it in the addon list.
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Game details
+      description: Filled in from the game (client, language, chat number, settings, last error). No character names.
+      render: text
+  - type: textarea
+    id: error
+    attributes:
+      label: Lua error
+      description: If you got one, paste the whole message. You can turn errors on with /console scriptErrors 1.
+      render: text
+  - type: textarea
+    id: addons
+    attributes:
+      label: Other addons
+      description: Any other addons you use, especially group finder or chat addons.

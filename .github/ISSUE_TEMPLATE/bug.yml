@@ -15,8 +15,6 @@ body:
       label: "/og status output"
       description: Type /og status in game and paste the result here.
       render: text
-    validations:
-      required: true
   - type: input
     id: version
     attributes:

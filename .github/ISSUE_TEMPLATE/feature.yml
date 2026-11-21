@@ -9,3 +9,8 @@ body:
       description: Describe how you'd use it in game.
     validations:
       required: true
+  - type: input
+    id: version
+    attributes:
+      label: OpenGroup version
+      description: Filled in when you come from the game. Optional.
