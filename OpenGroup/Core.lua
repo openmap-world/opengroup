@@ -1066,7 +1066,7 @@ end
 -- (Size, then Age, then Where).
 L.COLUMNS = {
 	{ key = "cls", w = 16 }, { key = "lvl", w = 22 }, { key = "leader", w = 112, min = 80 }, { key = "act", flex = true, min = 96 },
-	{ key = "levels", w = 50, drop = 2 }, { key = "needs", w = 98 },
+	{ key = "levels", w = 50, drop = 2 }, { key = "needs", w = 138 },
 	{ key = "where", w = 82, min = 66, drop = 3 }, { key = "age", w = 30, drop = 1 },
 }
 L.COL_GAP = 6

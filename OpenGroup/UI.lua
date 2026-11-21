@@ -680,9 +680,12 @@ local function buildRow(row)
 	for i = 1, 5 do
 		row.roles[i] = row:CreateTexture(nil, "ARTWORK")
 		-- a needed slot glows (green, gold when it wants a role you play), softly pulsing
-		row.glow[i] = row:CreateTexture(nil, "BORDER")
-		row.glow[i]:SetPoint("TOPLEFT", row.roles[i], "TOPLEFT", -3, 3)
-		row.glow[i]:SetPoint("BOTTOMRIGHT", row.roles[i], "BOTTOMRIGHT", 3, -3)
+		-- a soft round glow, a little larger than the icon (no square fill)
+		row.glow[i] = row:CreateTexture(nil, "OVERLAY")
+		row.glow[i]:SetTexture("Interface\Buttons\UI-ActionButton-Border")
+		row.glow[i]:SetBlendMode("ADD")
+		row.glow[i]:SetPoint("CENTER", row.roles[i], "CENTER", 0, 0)
+		row.glow[i]:SetSize(38, 38)
 		row.glow[i]:Hide()
 		if row.glow[i].CreateAnimationGroup then
 			local g = row.glow[i]:CreateAnimationGroup()
@@ -692,8 +695,9 @@ local function buildRow(row)
 			row.glow[i].pulse = g
 		end
 		row.badge[i] = row:CreateTexture(nil, "OVERLAY")
-		row.badge[i]:SetSize(11, 11)
-		row.badge[i]:SetPoint("CENTER", row.roles[i], "BOTTOMRIGHT", -1, 1)
+		-- the member's role, small, tucked into the icon's bottom-right corner
+		row.badge[i]:SetSize(9, 9)
+		row.badge[i]:SetPoint("BOTTOMRIGHT", row.roles[i], "BOTTOMRIGHT", 1, -1)
 		row.badge[i]:Hide()
 		row.plus[i] = row:CreateFontString(nil, "OVERLAY", "GameFontGreenSmall")
 		row.plus[i]:SetPoint("CENTER", row.roles[i], "BOTTOMRIGHT", -1, 2)
@@ -986,7 +990,8 @@ local function fillRow(row, d)
 			elseif sl.kind == "open" then
 				W.spotIcon(t, sl.role, sl.class)
 				local mine = browse.slotWantsMe(sl)
-				glow:SetColorTexture(mine and 1 or 0.2, mine and 0.78 or 0.95, mine and 0.15 or 0.3, mine and 0.55 or 0.4)
+				glow:SetVertexColor(mine and 1 or 0.3, mine and 0.8 or 1, mine and 0.2 or 0.35, mine and 0.8 or 0.65)
+				glow:SetSize(compact and 32 or 38, compact and 32 or 38)
 				glow:Show()
 				if glow.pulse and not calm then glow.pulse:Play() end
 			else
@@ -4192,8 +4197,11 @@ end)()
 			local p = c:CreateFontString(nil, "OVERLAY", "GameFontGreen")
 			p:SetPoint("CENTER", t, "BOTTOMRIGHT", -1, 2)
 			p:SetText("+")
-			local gl = c:CreateTexture(nil, "BORDER")
-			gl:SetPoint("TOPLEFT", t, "TOPLEFT", -3, 3) gl:SetPoint("BOTTOMRIGHT", t, "BOTTOMRIGHT", 3, -3)
+			local gl = c:CreateTexture(nil, "OVERLAY")
+			gl:SetTexture("Interface\Buttons\UI-ActionButton-Border")
+			gl:SetBlendMode("ADD")
+			gl:SetPoint("CENTER", t, "CENTER", 0, 0)
+			gl:SetSize(46, 46)
 			gl:Hide()
 			c.glows = c.glows or {}
 			c.glows[i] = gl
@@ -4278,7 +4286,7 @@ end)()
 				elseif sl.kind == "open" then
 					W.spotIcon(t, sl.role, sl.class)
 					local mine = browse.slotWantsMe(sl)
-					c.glows[i]:SetColorTexture(mine and 1 or 0.2, mine and 0.78 or 0.95, mine and 0.15 or 0.3, mine and 0.55 or 0.4)
+					c.glows[i]:SetVertexColor(mine and 1 or 0.3, mine and 0.8 or 1, mine and 0.2 or 0.35, mine and 0.8 or 0.65)
 					c.glows[i]:Show()
 					w:SetText((mine and GOLD or GREEN) .. "need " .. ((ROLE_WORD[sl.role or 0] or "any"):lower()) .. "|r")
 				else
