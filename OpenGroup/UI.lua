@@ -247,11 +247,36 @@ browse.HEADER_H = 38
 
 function browse.filtersActive()
 	local d = db() or {}
-	return filterCat ~= nil or next(filterActs) ~= nil or (d.where or "all") ~= "all" or d.allLevels == true
+	return filterCat ~= nil or next(filterActs) ~= nil or (d.where or "all") ~= "all" or d.allLevels == true or (d.showKind ~= nil)
+end
+-- a section header clicked: only that activity (again: all of them); shift: add it to the ones shown
+function browse.pickActivity(id, add)
+	if add then
+		filterActs[id] = (not filterActs[id]) or nil
+	else
+		local only = filterActs[id] and next(filterActs, nil) == id and next(filterActs, id) == nil
+		filterActs = {}
+		if not only then filterActs[id] = true end
+	end
+	collapsed = {}
+	W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON")
+	L.onChange()
+end
+function browse.clearActivities() filterActs = {} L.onChange() end
+function browse.pickedActivities()
+	local out = {}
+	for id in pairs(filterActs) do out[#out + 1] = id end
+	table.sort(out)
+	return out
+end
+function browse.setShow(kind)
+	db().showKind = kind
+	if browse.showBtn then browse.showBtn:Paint() end
+	L.onChange()
 end
 function browse.resetFilters()
 	filterCat, filterActs = nil, {}
-	db().where, db().allLevels = "all", false
+	db().where, db().allLevels, db().showKind = "all", false, nil
 	W.sound("IG_MAINMENU_OPTION_CHECKBOX_OFF")
 	L.onChange()
 end
@@ -273,6 +298,19 @@ function browse.buildFilter(root)
 	local a = section("Activity")
 	if a ~= root and a.SetScrollMode then pcall(a.SetScrollMode, a, 420) end
 	local lvl = UnitLevel("player")
+	-- quick picks: several at once
+	local function pickAll(test)
+		filterActs = {}
+		for _, cat in ipairs(A.load()) do for _, id in ipairs(cat.acts) do if test(cat, id) then filterActs[id] = true end end end
+		L.onChange()
+	end
+	if a.CreateButton then
+		a:CreateButton("Suggested for my level", function() pickAll(function(_, id) local i = A.get(id) return i and (i.min or 0) > 0 and lvl >= i.min - 3 and lvl <= (i.max or 60) + 3 end) end)
+		a:CreateButton("All dungeons", function() pickAll(function(cat) return W.kindOf(cat.name) == "dungeon" end) end)
+		a:CreateButton("All raids", function() pickAll(function(cat) return W.kindOf(cat.name) == "raid" end) end)
+		a:CreateButton("Clear", function() filterActs = {} L.onChange() end)
+		if a.CreateDivider then a:CreateDivider() end
+	end
 	for _, cat in ipairs(A.load()) do
 		if (not filterCat or cat.id == filterCat) and #cat.acts > 0 then
 			if not filterCat and a.CreateTitle then a:CreateTitle(cat.name) end
@@ -281,6 +319,10 @@ function browse.buildFilter(root)
 					function() filterActs[id] = (not filterActs[id]) or nil L.onChange() end)
 			end
 		end
+	end
+	local sk = section("Show")
+	for _, o in ipairs({ { nil, "Groups and players" }, { "groups", "Groups only" }, { "players", "Players looking for a group" } }) do
+		sk:CreateRadio(o[2], function() return db().showKind == o[1] end, function() browse.setShow(o[1]) end)
 	end
 	local w = section("Where")
 	for _, o in ipairs(browse.WHERE) do
@@ -369,6 +411,20 @@ local questFilter = nil
 local chip = CreateFrame("Button", nil, browse.header)
 chip:Hide()
 
+
+-- the activities picked (a section header clicked, or the Filter menu), with an x to clear them
+browse.actLine = CreateFrame("Frame", nil, browse.content)
+browse.actLine:SetHeight(20)
+browse.actLine.text = browse.actLine:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+browse.actLine.text:SetPoint("LEFT", 0, 0)
+browse.actLine.text:SetPoint("RIGHT", -26, 0)
+browse.actLine.text:SetJustifyH("LEFT")
+browse.actLine.text:SetWordWrap(false)
+browse.actLine.x = CreateFrame("Button", nil, browse.actLine, "UIPanelCloseButton")
+browse.actLine.x:SetSize(22, 22)
+browse.actLine.x:SetPoint("RIGHT", 0, 0)
+browse.actLine.x:SetScript("OnClick", function() if browse.clearActivities then browse.clearActivities() end end)
+browse.actLine:Hide()
 
 local box = CreateFrame("Frame", nil, browse.content, "WowScrollBoxList")
 box:SetPoint("TOPLEFT", 6, -24)
@@ -553,6 +609,16 @@ local function buildRow(row)
 	row.headBar2:SetSize(4, 18)
 	row.headBar2:SetPoint("CENTER", row.headBar, "CENTER")
 	row.headBar2:SetColorTexture(1, 0.82, 0, 1)
+	-- the - / + at the right folds the section; the rest of the bar picks the activity
+	row.headFold = CreateFrame("Button", nil, row.head)
+	row.headFold:SetSize(40, 26)
+	row.headFold:SetPoint("RIGHT", 0, 0)
+	row.headFold:SetScript("OnClick", function()
+		local d = row.data
+		if d and d.header then collapsed[d.header] = not collapsed[d.header] W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON") L.onChange() end
+	end)
+	row.headFold:SetScript("OnEnter", function(self) GameTooltip:SetOwner(self, "ANCHOR_TOP") GameTooltip:SetText("Fold this section") GameTooltip:Show() end)
+	row.headFold:SetScript("OnLeave", GameTooltip_Hide)
 	-- listing parts: a dark panel with a thin edge, warm and gold-underlined when selected
 	row.panel = CreateFrame("Frame", nil, row)
 	row.panel:SetPoint("TOPLEFT", 2, -2) row.panel:SetPoint("BOTTOMRIGHT", -2, 2)
@@ -594,11 +660,23 @@ local function buildRow(row)
 	row.roles = {}
 	-- the Group column: five slots, members (class icon, a small role badge) then open spots
 	-- (the role wanted, with a green +)
-	row.plus, row.badge = {}, {}
+	row.plus, row.badge, row.glow = {}, {}, {}
 	for i = 1, 5 do
 		row.roles[i] = row:CreateTexture(nil, "ARTWORK")
+		-- a needed slot glows (green, gold when it wants a role you play), softly pulsing
+		row.glow[i] = row:CreateTexture(nil, "BORDER")
+		row.glow[i]:SetPoint("TOPLEFT", row.roles[i], "TOPLEFT", -3, 3)
+		row.glow[i]:SetPoint("BOTTOMRIGHT", row.roles[i], "BOTTOMRIGHT", 3, -3)
+		row.glow[i]:Hide()
+		if row.glow[i].CreateAnimationGroup then
+			local g = row.glow[i]:CreateAnimationGroup()
+			local a = g:CreateAnimation("Alpha")
+			a:SetFromAlpha(1) a:SetToAlpha(0.45) a:SetDuration(0.9)
+			if g.SetLooping then g:SetLooping("BOUNCE") end
+			row.glow[i].pulse = g
+		end
 		row.badge[i] = row:CreateTexture(nil, "OVERLAY")
-		row.badge[i]:SetSize(9, 9)
+		row.badge[i]:SetSize(11, 11)
 		row.badge[i]:SetPoint("CENTER", row.roles[i], "BOTTOMRIGHT", -1, 1)
 		row.badge[i]:Hide()
 		row.plus[i] = row:CreateFontString(nil, "OVERLAY", "GameFontGreenSmall")
@@ -633,7 +711,12 @@ local function buildRow(row)
 			if d.l then selected = d.l.leader L.onChange() browse.personMenu(self, d.l.leader, d.l) end
 			return
 		end
-		if d.header then collapsed[d.header] = not collapsed[d.header] W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON") L.onChange() return end
+		if d.header then
+			local id = tonumber(tostring(d.header):match("^a(%d+)$"))
+			if id and button ~= "RightButton" then browse.pickActivity(id, IsShiftKeyDown and IsShiftKeyDown()) return end
+			collapsed[d.header] = not collapsed[d.header] W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON") L.onChange() return
+		end
+		if not d.l then return end
 		selected = d.l.leader
 		W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON")
 		L.onChange()
@@ -644,6 +727,13 @@ local function buildRow(row)
 	end)
 	row:SetScript("OnEnter", function(self)
 		local d = self.data
+		if d and d.header and tostring(d.header):match("^a%d+$") then
+			GameTooltip:SetOwner(self, "ANCHOR_TOP")
+			GameTooltip:SetText("Click to show only this")
+			GameTooltip:AddLine("Shift-click to add it to what's shown. Click again to show everything. The - at the right folds the section.", 1, 1, 1, true)
+			GameTooltip:Show()
+			return
+		end
 		if not d or not d.l then return end
 		local l, r = d.l, d.r
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -659,6 +749,11 @@ local function buildRow(row)
 			local names = {}
 			for _, b in ipairs(ROLES) do if has(l.need, b) then names[#names + 1] = W.ROLE_NAME[b] end end
 			GameTooltip:AddLine((r.kind == "group" and "Looking for: " or "Queued as: ") .. table.concat(names, ", "), .8, .8, .8)
+			if r.kind == "group" then
+				for _, sl in ipairs(browse.slotsOf(l, r)) do
+					if browse.slotWantsMe(sl) then GameTooltip:AddLine("This group needs you (" .. W.ROLE_NAME[sl.role] .. ")", 1, .82, .2) break end
+				end
+			end
 		end
 		if l.size > 1 and type(l.spots) == "table" and #l.spots > 0 then
 			GameTooltip:AddLine(" ")
@@ -704,7 +799,7 @@ local function layoutRow(row, compact)
 	put(row.class, "cls") put(row.level, "lvl") put(row.name, "leader") put(row.act, "act")
 	put(row.levels, "levels") put(row.size, "size") put(row.shard, "where") put(row.age, "age")
 	local needs = cols.at.needs
-	local s = compact and 15 or 16
+	local s = compact and 18 or 22
 	for i, t in ipairs(row.roles) do
 		t:SetSize(s, s)
 		at(t, "LEFT", row, "LEFT", 10 + needs.x + (i - 1) * (s + 3), y)
@@ -727,10 +822,9 @@ function browse.slotsOf(l, r)
 		return out
 	end
 	if r.kind == "player" then
-		local role = 0
-		for _, b in ipairs(ROLES) do if has(l.need or 0, b) then role = b break end end
-		out[1] = { kind = "member", class = l.class, role = role }
-		out.text = "solo"
+		-- a solo player: "LFG" and the roles they play, big
+		for _, b in ipairs(ROLES) do if has(l.need or 0, b) then out[#out + 1] = { kind = "play", role = b } end end
+		out.text = "LFG"
 		return out
 	end
 	-- members: who we know, else the leader and "?" for the rest
@@ -741,21 +835,44 @@ function browse.slotsOf(l, r)
 		out[1] = { kind = "member", class = l.class, role = 0 }
 		for _ = 2, math.min(size, 5) do out[#out + 1] = { kind = "unknown" } end
 	end
-	-- open spots: the ones set, else one per role wanted, then any
+	-- open spots: the ones set; else, when we know the members' roles, what a party of 1 tank,
+	-- 1 healer and 3 damage is short of (two damage missing: two slots); else one per role wanted
 	local spots = (type(l.spots) == "table" and #l.spots > 0) and l.spots or nil
 	if spots then
 		for _, sp in ipairs(spots) do if #out < 5 then out[#out + 1] = { kind = "open", role = sp.role, class = sp.class } end end
 	else
-		for _, b in ipairs(ROLES) do if has(l.need or 0, b) and #out < 5 then out[#out + 1] = { kind = "open", role = b } end end
+		local have, known = { [1] = 0, [2] = 0, [4] = 0 }, members ~= nil
+		for _, m in ipairs(members or {}) do
+			if (m.role or 0) > 0 and have[m.role] then have[m.role] = have[m.role] + 1 else known = false end
+		end
+		if known then
+			local want = { [1] = 1 - have[1], [2] = 1 - have[2], [4] = 3 - have[4] }
+			for _, b in ipairs(ROLES) do for _ = 1, math.max(0, want[b]) do if #out < 5 then out[#out + 1] = { kind = "open", role = b } end end end
+		else
+			for _, b in ipairs(ROLES) do if has(l.need or 0, b) and #out < 5 then out[#out + 1] = { kind = "open", role = b } end end
+		end
 	end
 	while #out < 5 do out[#out + 1] = { kind = "any" } end
+	-- in words: "Needs Heal, 2 DPS"
+	local n = { [1] = 0, [2] = 0, [4] = 0 }
+	for _, sl in ipairs(out) do if sl.kind == "open" and n[sl.role or 0] then n[sl.role] = n[sl.role] + 1 end end
+	local words = {}
+	for _, b in ipairs(ROLES) do
+		if n[b] > 0 then words[#words + 1] = (n[b] > 1 and (n[b] .. " ") or "") .. (b == 1 and "Tank" or b == 2 and "Heal" or "DPS") end
+	end
+	out.needs = #words > 0 and ("Needs " .. table.concat(words, ", ")) or nil
 	return out
+end
+-- does this open slot want a role we play?
+function browse.slotWantsMe(sl)
+	return sl and sl.kind == "open" and (sl.role or 0) > 0 and has(myRoles(), sl.role)
 end
 
 local function setListingShown(row, on)
 	for _, r in ipairs({ row.bg, row.name, row.level, row.act, row.levels, row.size, row.note, row.shard, row.rolesLabel, row.age }) do r:SetShown(on) end
 	for _, t in ipairs(row.roles) do t:SetShown(on) end
-	if not on then for _, p in ipairs(row.plus or {}) do p:Hide() end for _, b in ipairs(row.badge or {}) do b:Hide() end end
+	if not on then for _, p in ipairs(row.plus or {}) do p:Hide() end for _, b in ipairs(row.badge or {}) do b:Hide() end for _, g in ipairs(row.glow or {}) do g:Hide() end end
+	if row.subText then row.subText:Hide() end
 	if not on then row.class:Hide() row.sel:Hide() row.askCheck:Hide() row.hl:SetAlpha(0) else row.hl:SetAlpha(0.5) end
 	row.head:SetShown(not on)
 	row.headSign:Hide() row.headBar2:SetShown(false)
@@ -774,6 +891,18 @@ local function fillRow(row, d)
 		setListingShown(row, false)
 		row.headText:SetText(d.text .. "  " .. GREY .. "(" .. d.count .. ")|r")
 		row.headBar2:SetShown(collapsed[d.header] == true)
+		row.hl:SetAlpha(0.3)
+		return
+	end
+	if d.sub then
+		setListingShown(row, false)
+		row.head:Hide()
+		if not row.subText then
+			row.subText = row:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+			row.subText:SetPoint("LEFT", 16, 0)
+		end
+		row.subText:SetText(d.sub)
+		row.subText:Show()
 		return
 	end
 	setListingShown(row, true)
@@ -822,28 +951,40 @@ local function fillRow(row, d)
 	-- badge, "?" where we don't know who), then the open spots (the role wanted, with a green +),
 	-- then any other free places (dim). A solo player: one slot and "solo". Raids: "12/40".
 	local slots = browse.slotsOf(l, r)
+	local calm = db().reduceMotion == true
 	for k, t in ipairs(row.roles) do
 		local sl = slots[k]
-		local badge, plus = row.badge[k], row.plus[k]
-		badge:Hide() plus:Hide()
+		local badge, plus, glow = row.badge[k], row.plus[k], row.glow[k]
+		badge:Hide() plus:Hide() glow:Hide()
+		if glow.pulse then glow.pulse:Stop() end
 		if sl then
 			t:SetTexCoord(0, 1, 0, 1) t:SetDesaturated(false) t:SetVertexColor(1, 1, 1) t:SetAlpha(1)
 			if sl.kind == "member" then
 				if not (sl.class and W.setClassIcon(t, sl.class)) then t:SetTexture(QUESTION_ICON) end
+				t:SetAlpha(0.75)
 				if (sl.role or 0) > 0 and W.ROLE_ATLAS[sl.role] then badge:SetAtlas(W.ROLE_ATLAS[sl.role]) badge:Show() end
 			elseif sl.kind == "unknown" then
-				t:SetTexture(QUESTION_ICON) t:SetAlpha(0.6)
+				t:SetTexture(QUESTION_ICON) t:SetAlpha(0.45)
+			elseif sl.kind == "play" then
+				t:SetAtlas(W.ROLE_ATLAS[sl.role])
 			elseif sl.kind == "open" then
 				W.spotIcon(t, sl.role, sl.class)
-				t:SetAlpha((d.match and (sl.role or 0) > 0 and not has(L.mine and L.mine.need or 0, sl.role)) and 0.3 or 0.85)
-				plus:Show()
+				local mine = browse.slotWantsMe(sl)
+				glow:SetColorTexture(mine and 1 or 0.2, mine and 0.78 or 0.95, mine and 0.15 or 0.3, mine and 0.55 or 0.4)
+				glow:Show()
+				if glow.pulse and not calm then glow.pulse:Play() end
 			else
-				t:SetColorTexture(0.3, 0.25, 0.18, 0.5)
+				t:SetColorTexture(0.3, 0.25, 0.18, 0.4)
 			end
 			t:Show()
 		else
 			t:Hide()
 		end
+	end
+	-- the note line starts with what the group needs, in words
+	if slots.needs and not compact then
+		row.note:SetText(GREEN .. slots.needs .. "|r" .. (note ~= "" and (GREY .. "  -  |r" .. note) or ""))
+		row.note:Show()
 	end
 	row.size:SetText("")
 	if summon or bgq then
@@ -897,6 +1038,7 @@ local view = CreateScrollBoxListLinearView()
 view:SetElementExtentCalculator(function(_, d)
 	local c = db().compact == true
 	if d.header then return c and COMPACT_HEAD_H or HEAD_H end
+	if d.sub then return 18 end
 	return c and COMPACT_ROW_H or ROW_H
 end)
 view:SetElementInitializer("Button", fillRow)
@@ -1067,6 +1209,9 @@ function browse.refresh()
 		r.dist = L.levelDistance(r, lvl)
 		r.fit, r.dim = L.rowFit(r, me)
 		if not L.whereOK(r, d0.where) or not matchesFilter(l) then return end
+		-- Show: groups only, or players looking for a group only
+		local show = d0.showKind
+		if (show == "groups" and r.kind == "player") or (show == "players" and r.kind ~= "player") then return end
 		-- the search box: names, activities and notes (searching looks at every level)
 		local q = browse.search or ""
 		if q ~= "" and not (r.leader .. " " .. tostring(r.title) .. " " .. tostring(r.groupName) .. " " .. (r.actNames or "") .. " " .. r.note):lower():find(q, 1, true) then return end
@@ -1106,7 +1251,19 @@ function browse.refresh()
 				text = hex .. g.text .. "|r" .. (r1.min > 0 and ("  " .. hex .. (r1.min == r1.max and r1.min or (r1.min .. "-" .. r1.max)) .. "|r") or "")
 			end
 			header(g.key, text, #g.rows)
-			if not collapsed[g.key] then add(g.rows) end
+			if not collapsed[g.key] then
+				-- groups first, then players looking for a group, each under a thin label when both are there
+				local grp, solo = {}, {}
+				for _, rr in ipairs(g.rows) do if rr.kind == "player" then solo[#solo + 1] = rr else grp[#grp + 1] = rr end end
+				if #grp > 0 and #solo > 0 then
+					items[#items + 1] = { sub = "Groups" }
+					add(grp)
+					items[#items + 1] = { sub = "Looking for a group" }
+					add(solo)
+				else
+					add(g.rows)
+				end
+			end
 		end
 	else
 		add(rows)
@@ -1150,6 +1307,18 @@ function browse.refresh()
 	local promptQ = not questFilter and browse.questPrompt or nil
 	qcard:SetShown(questFilter ~= nil or promptQ ~= nil)
 	local top = (questFilter or promptQ) and -92 or -4
+	-- "Only Blackmaw Hold, Blackrock Depths  x": the activities picked, above the list
+	local picked = browse.pickedActivities()
+	browse.actLine:SetShown(#picked > 0)
+	if #picked > 0 then
+		local names = {}
+		for _, id in ipairs(picked) do names[#names + 1] = A.name(id) or ("activity " .. id) end
+		browse.actLine.text:SetText(GOLD .. "Only|r " .. table.concat(names, ", "))
+		browse.actLine:ClearAllPoints()
+		browse.actLine:SetPoint("TOPLEFT", 10, top)
+		browse.actLine:SetPoint("RIGHT", box, "RIGHT", 0, 0)
+		top = top - 22
+	end
 	browse.colHead:ClearAllPoints()
 	browse.colHead:SetPoint("TOPLEFT", 6, top)
 	browse.colHead:SetPoint("RIGHT", box, "RIGHT", 0, 0)
@@ -3923,10 +4092,33 @@ end)()
 	vb:SetScript("OnLeave", GameTooltip_Hide)
 	vb:Paint()
 	browse.viewBtn = vb
+	-- Show: all / groups / players looking for a group (also in the Filter menu)
+	local sb = CreateFrame("Button", nil, browse.header, "UIPanelButtonTemplate")
+	sb:SetSize(70, 22)
+	sb:SetPoint("RIGHT", vb, "LEFT", -6, 0)
+	local SHOW_NEXT = { [""] = "groups", groups = "players", players = "" }
+	function sb:Paint()
+		local k = type(db()) == "table" and db().showKind or nil
+		self:SetText(k == "groups" and "Groups" or k == "players" and "Players" or "All")
+	end
+	sb:SetScript("OnShow", sb.Paint)
+	sb:SetScript("OnClick", function()
+		local nxt = SHOW_NEXT[db().showKind or ""]
+		browse.setShow(nxt ~= "" and nxt or nil)
+	end)
+	sb:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:SetText("Show: all, groups only, or players looking for a group")
+		GameTooltip:AddLine("Click to switch. Also in the Filter menu.", 1, 1, 1, true)
+		GameTooltip:Show()
+	end)
+	sb:SetScript("OnLeave", GameTooltip_Hide)
+	sb:Paint()
+	browse.showBtn = sb
 	if browse.searchBox then
 		browse.searchBox:ClearAllPoints()
 		browse.searchBox:SetPoint("LEFT", browse.header, "TOPLEFT", 8, -19)
-		browse.searchBox:SetPoint("RIGHT", vb, "LEFT", -10, 0)
+		browse.searchBox:SetPoint("RIGHT", sb, "LEFT", -10, 0)
 	end
 
 	local list = CreateFrame("Frame", nil, browse.content, "WowScrollBoxList")
@@ -3970,6 +4162,11 @@ end)()
 			local p = c:CreateFontString(nil, "OVERLAY", "GameFontGreen")
 			p:SetPoint("CENTER", t, "BOTTOMRIGHT", -1, 2)
 			p:SetText("+")
+			local gl = c:CreateTexture(nil, "BORDER")
+			gl:SetPoint("TOPLEFT", t, "TOPLEFT", -3, 3) gl:SetPoint("BOTTOMRIGHT", t, "BOTTOMRIGHT", 3, -3)
+			gl:Hide()
+			c.glows = c.glows or {}
+			c.glows[i] = gl
 			local w = c:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 			w:SetPoint("TOP", t, "BOTTOM", 0, -3)
 			w:SetWidth(46)
@@ -4037,7 +4234,7 @@ end)()
 		c.slotList = slots
 		for i = 1, 5 do
 			local t, b, p, w, sl = c.slots[i], c.badges[i], c.plus[i], c.words[i], slots[i]
-			b:Hide() p:Hide()
+			b:Hide() p:Hide() c.glows[i]:Hide()
 			if sl then
 				t:SetTexCoord(0, 1, 0, 1) t:SetDesaturated(false) t:SetVertexColor(1, 1, 1) t:SetAlpha(1)
 				if sl.kind == "member" then
@@ -4046,9 +4243,14 @@ end)()
 					w:SetText(ROLE_WORD[sl.role or 0] or (sl.class and W.className(sl.class)) or "")
 				elseif sl.kind == "unknown" then
 					t:SetTexture(QUESTION_ICON) t:SetAlpha(0.6) w:SetText(GREY .. "member|r")
+				elseif sl.kind == "play" then
+					t:SetAtlas(W.ROLE_ATLAS[sl.role]) w:SetText(ROLE_WORD[sl.role] or "")
 				elseif sl.kind == "open" then
-					W.spotIcon(t, sl.role, sl.class) t:SetAlpha(0.85) p:Show()
-					w:SetText(GREEN .. "need " .. ((ROLE_WORD[sl.role or 0] or "any"):lower()) .. "|r")
+					W.spotIcon(t, sl.role, sl.class)
+					local mine = browse.slotWantsMe(sl)
+					c.glows[i]:SetColorTexture(mine and 1 or 0.2, mine and 0.78 or 0.95, mine and 0.15 or 0.3, mine and 0.55 or 0.4)
+					c.glows[i]:Show()
+					w:SetText((mine and GOLD or GREEN) .. "need " .. ((ROLE_WORD[sl.role or 0] or "any"):lower()) .. "|r")
 				else
 					t:SetColorTexture(0.3, 0.25, 0.18, 0.5) w:SetText(GREY .. "open|r")
 				end
@@ -4060,7 +4262,7 @@ end)()
 		c.extra:SetText(slots.text and (GREY .. slots.text .. "|r") or "")
 		c.extra:ClearAllPoints()
 		if #slots > 0 then c.extra:SetPoint("LEFT", c.slots[#slots], "RIGHT", 8, 0) else c.extra:SetPoint("LEFT", c.slots[1], "LEFT", 0, 0) end
-		c.note:SetText(l.note or "")
+		c.note:SetText((slots.needs and (GREEN .. slots.needs .. "|r" .. ((l.note or "") ~= "" and (GREY .. "  -  |r") or "")) or "") .. (l.note or ""))
 		local summon, bgq = r.kind == "summon", r.kind == "bgq"
 		c.ask:SetText(summon and "Request summon" or bgq and "Ask" or r.kind == "player" and "Invite" or "Ask to join")
 		c.ask:SetShown(not L.isMe(l.leader))

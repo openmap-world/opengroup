@@ -908,8 +908,11 @@ local Bs = OpenGroup_UI.browse
 local function kinds(sl) local k = {} for i, x in ipairs(sl) do k[i] = x.kind .. (x.role and x.role > 0 and x.role or "") end return table.concat(k, ",") .. (sl.text and ("|" .. sl.text) or "") end
 local g3 = { size = 3, need = 2, class = "PRIEST", members = { { class = "PRIEST", role = 4 }, { class = "WARRIOR", role = 1 }, { class = "MAGE", role = 4 } } }
 print("slots:", kinds(Bs.slotsOf(g3, { kind = "group" })))
-assert(kinds(Bs.slotsOf(g3, { kind = "group" })) == "member4,member1,member4,open2,any", "members, then the healer wanted, then a free place")
-assert(kinds(Bs.slotsOf({ size = 1, need = 6, class = "DRUID" }, { kind = "player" })) == "member2|solo", "solo: one slot and solo")
+assert(kinds(Bs.slotsOf(g3, { kind = "group" })) == "member4,member1,member4,open2,open4", "members, then exactly what's missing: a healer and one more DPS")
+assert(Bs.slotsOf(g3, { kind = "group" }).needs == "Needs Heal, DPS", "in words")
+local g2 = { size = 2, need = 6, class = "WARRIOR", members = { { class = "WARRIOR", role = 1 }, { class = "MAGE", role = 4 } } }
+assert(kinds(Bs.slotsOf(g2, { kind = "group" })) == "member1,member4,open2,open4,open4" and Bs.slotsOf(g2, { kind = "group" }).needs == "Needs Heal, 2 DPS", "two DPS missing: two DPS slots")
+assert(kinds(Bs.slotsOf({ size = 1, need = 6, class = "DRUID" }, { kind = "player" })) == "play2,play4|LFG", "solo: LFG and the roles they play")
 print("raid:", kinds(Bs.slotsOf({ size = 12, need = 2 }, { kind = "group" }))) assert(kinds(Bs.slotsOf({ size = 12, need = 2 }, { kind = "group" })) == "|12/20", "a raid: a count")
 assert(kinds(Bs.slotsOf({ size = 2, need = 1, class = "ROGUE" }, { kind = "group" })) == "member,unknown,open1,any,any", "a chat post: the poster, ? for the rest")
 print("group slots ok")
@@ -929,7 +932,7 @@ local line = CreateFrame("Frame") line.built = false
 INITS[#INITS](line, lineWithCard)
 for _, c in ipairs(line.cards) do if c.d and c.d.l.leader == "Card C" then
   c.scripts.OnEnter(c)
-  assert(c.words[1].text == "Heal" and c.words[2].text == "Tank" and c.words[4].text:find("need heal", 1, true) and c.ask.text == "Ask to join", "slots spelled out, Ask to join")
+  assert(c.words[1].text == "Heal" and c.words[2].text == "Tank" and c.words[4].text:find("need dps", 1, true) and c.ask.text == "Ask to join", "slots spelled out, Ask to join")
 end end
 local hline = CreateFrame("Frame") hline.built = false
 INITS[#INITS](hline, { header = "x", text = "Blackrock Depths", count = 2 })
@@ -959,5 +962,27 @@ assert(OpenGroup_UI.browse.questPrompt == nil, "the setting turns the offer off"
 OpenGroupDB.questPrompt = nil
 OpenGroup.listings["Any A"] = nil
 print("quest offer ok")
+-- Show: groups / players; a header click picks its activity, shift adds, again clears
+local Bh = OpenGroup_UI.browse
+OpenGroup.listings["Grp G"] = { leader = "Grp G", seq = 1, shard = 55, level = 58, size = 3, hops = 0, class = "MAGE", need = 2, cat = 2, acts = {30}, price = 0, quest = 0, title = "", note = "", got = CLOCK }
+OpenGroup.listings["Solo S"] = { leader = "Solo S", seq = 1, shard = 55, level = 58, size = 1, hops = 0, class = "MAGE", need = 4, cat = 2, acts = {30}, price = 0, quest = 0, title = "", note = "", got = CLOCK }
+OpenGroupDB.tab = "browse" OpenGroupDB.allLevels = true OpenGroupDB.where = "all" OpenGroupDB.groupBy = "act"
+local function shownNames() local t = {} for _, d in ipairs(PROVIDED) do if d.l then t[d.l.leader] = true end end return t end
+local function subs() local t = {} for _, d in ipairs(PROVIDED) do if d.sub then t[#t + 1] = d.sub end end return table.concat(t, "/") end
+SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+assert(subs():find("Groups/Looking for a group", 1, true), "groups and players under their own labels")
+Bh.setShow("groups") SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+assert(shownNames()["Grp G"] and not shownNames()["Solo S"], "groups only")
+Bh.setShow("players") SlashCmdList.OPENGROUP("") SlashCmdList.OPENGROUP("")
+assert(shownNames()["Solo S"] and not shownNames()["Grp G"], "players only")
+Bh.setShow(nil)
+Bh.pickActivity(30, false)
+assert(#Bh.pickedActivities() == 1 and Bh.pickedActivities()[1] == 30, "a header click: only that activity")
+Bh.pickActivity(31, true)
+assert(#Bh.pickedActivities() == 2, "shift-click adds")
+Bh.pickActivity(31, true) Bh.pickActivity(30, false)
+assert(#Bh.pickedActivities() == 0, "clicking the only one again shows everything")
+OpenGroup.listings["Grp G"], OpenGroup.listings["Solo S"] = nil, nil
+print("show and pick ok")
 print("smoke OK")
 ''')
