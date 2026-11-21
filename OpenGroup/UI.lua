@@ -981,17 +981,19 @@ local function fillRow(row, d)
 			t:SetTexCoord(0, 1, 0, 1) t:SetDesaturated(false) t:SetVertexColor(1, 1, 1) t:SetAlpha(1)
 			if sl.kind == "member" then
 				if not (sl.class and W.setClassIcon(t, sl.class)) then t:SetTexture(QUESTION_ICON) end
-				t:SetAlpha(0.75)
+				t:SetAlpha(0.6)
 				if (sl.role or 0) > 0 and W.ROLE_ATLAS[sl.role] then badge:SetAtlas(W.ROLE_ATLAS[sl.role]) badge:Show() end
 			elseif sl.kind == "unknown" then
-				t:SetTexture(QUESTION_ICON) t:SetAlpha(0.45)
+				-- someone we don't know yet: a quiet grey "?"
+				t:SetTexture(QUESTION_ICON) t:SetDesaturated(true) t:SetAlpha(0.3)
 			elseif sl.kind == "play" then
 				t:SetAtlas(W.ROLE_ATLAS[sl.role])
 			elseif sl.kind == "open" then
 				W.spotIcon(t, sl.role, sl.class)
 				local mine = browse.slotWantsMe(sl)
-				glow:SetVertexColor(mine and 1 or 0.3, mine and 0.8 or 1, mine and 0.2 or 0.35, mine and 0.8 or 0.65)
-				glow:SetSize(compact and 32 or 38, compact and 32 or 38)
+				glow:SetVertexColor(mine and 1 or 0.3, mine and 0.8 or 1, mine and 0.2 or 0.35, 1)
+				-- (the texture's ring sits in its middle 36 of 64: this size puts it just outside the icon)
+				glow:SetSize(compact and 44 or 52, compact and 44 or 52)
 				glow:Show()
 				if glow.pulse and not calm then glow.pulse:Play() end
 			else
@@ -4201,7 +4203,7 @@ end)()
 			gl:SetTexture("Interface\Buttons\UI-ActionButton-Border")
 			gl:SetBlendMode("ADD")
 			gl:SetPoint("CENTER", t, "CENTER", 0, 0)
-			gl:SetSize(46, 46)
+			gl:SetSize(60, 60)
 			gl:Hide()
 			c.glows = c.glows or {}
 			c.glows[i] = gl
@@ -4286,7 +4288,7 @@ end)()
 				elseif sl.kind == "open" then
 					W.spotIcon(t, sl.role, sl.class)
 					local mine = browse.slotWantsMe(sl)
-					c.glows[i]:SetVertexColor(mine and 1 or 0.3, mine and 0.8 or 1, mine and 0.2 or 0.35, mine and 0.8 or 0.65)
+					c.glows[i]:SetVertexColor(mine and 1 or 0.3, mine and 0.8 or 1, mine and 0.2 or 0.35, 1)
 					c.glows[i]:Show()
 					w:SetText((mine and GOLD or GREEN) .. "need " .. ((ROLE_WORD[sl.role or 0] or "any"):lower()) .. "|r")
 				else
