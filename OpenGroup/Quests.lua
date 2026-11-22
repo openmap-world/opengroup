@@ -82,6 +82,54 @@ function Q.fromLink(link)
 	return tonumber(id), tonumber(level) or 0, name
 end
 
+-- Is this quest one people group for? An elite, group, dungeon or raid quest always is; otherwise
+-- only one with something to kill (talk, explore and deliver quests aren't).
+function Q.worthGrouping(id)
+	if not id or id <= 0 then return false end
+	-- the quest log's suggested group size, and its tag (Elite, Group, Dungeon, Raid)
+	if GetQuestLogIndexByID and GetQuestLogTitle then
+		local okI, idx = pcall(GetQuestLogIndexByID, id)
+		if okI and idx and idx > 0 then
+			local _, _, suggested = GetQuestLogTitle(idx)
+			if (tonumber(suggested) or 0) > 1 then return true end
+		end
+	end
+	local tag
+	if C_QuestLog and C_QuestLog.GetQuestTagInfo then
+		local ok, info = pcall(C_QuestLog.GetQuestTagInfo, id)
+		if ok and type(info) == "table" then tag = info.tagName end
+	elseif GetQuestTagInfo then
+		local ok, _, name = pcall(GetQuestTagInfo, id)
+		if ok then tag = name end
+	end
+	if type(tag) == "string" and (tag:find("Elite") or tag:find("Group") or tag:find("Dungeon") or tag:find("Raid")) then return true end
+	if C_QuestLog and C_QuestLog.GetQuestObjectives then
+		local ok, objs = pcall(C_QuestLog.GetQuestObjectives, id)
+		if ok and type(objs) == "table" then
+			for _, o in ipairs(objs) do if type(o) == "table" and o.type == "monster" then return true end end
+		end
+	end
+	return false
+end
+
+-- A quest just accepted: Q.onAccept gets it (OpenGroup may offer to find a group for it)
+Q.onAccept = nil
+if CreateFrame then
+	local qf = CreateFrame("Frame")
+	pcall(qf.RegisterEvent, qf, "QUEST_ACCEPTED")
+	qf:SetScript("OnEvent", function(_, _, a1, a2)
+		-- (Classic passes the log index and the quest id; later clients the id alone)
+		local id = (type(a2) == "number" and a2 > 0) and a2 or a1
+		if type(id) ~= "number" or id <= 0 or not Q.onAccept then return end
+		-- a moment later, when the log has its objectives
+		local function go()
+			local title = Q.name(id)
+			if title then pcall(Q.onAccept, { id = id, title = title, level = Q.level(id) or 0 }) end
+		end
+		if C_Timer and C_Timer.After then C_Timer.After(0.5, go) else go() end
+	end)
+end
+
 -- Shift-clicks. The game hands a quest link to the chat box (when one is open) and toggles quest
 -- tracking (when none is). Both are watched, never replaced; while the OpenGroup window is open the
 -- quest goes to Q.onPick.
@@ -109,6 +157,8 @@ if ChatEdit_InsertLink then
 	end)
 end
 local function watchHook(arg)
+	-- the game also tracks a quest by itself when you accept it: only a shift-click counts here
+	if not (IsShiftKeyDown and IsShiftKeyDown()) then return end
 	once(function()
 		local id = arg
 		if GetQuestLogTitle and type(arg) == "number" and arg < 1000 and not (C_QuestLog and C_QuestLog.GetInfo) then

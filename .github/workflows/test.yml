@@ -20,5 +20,8 @@ jobs:
       - run: pip install lupa
       - run: python tools/test.py OpenGroup
       - run: python tools/ui_smoke.py OpenGroup
+      - run: python tools/chat_corpus.py OpenGroup --min 95
+      - run: python tools/feed_sim.py OpenGroup 50 200 --check
+      - run: python tools/feed_sim.py OpenGroup 200 --root-leaves --check
       - name: The tools at least compile
         run: python -m compileall -q tools

@@ -1,0 +1,155 @@
+# LookingForGroup / Trade lines and what the parser should make of them.
+# expect | line
+#   expect: "none" (must not parse), or "<kind> <activity> <roles> <size>"
+#     kind:     g (group looking for people) or p (player looking for a group)
+#     activity: a lower-case piece of the first activity's name, "-" for none, "*" for any
+#     roles:    letters t h d for the roles asked for (or played), "-" for none, "*" for any
+#     size:     group size, or "*" for any
+# Made-up lines in the shapes people type; names and prices are invented.
+
+g blackrock depths hd 3 | LFM BRD need heals and dps, 3/5
+g stratholme th 3 | LF2M strat, tank + healer
+g blackrock depths h * | LF1M BRD need heals
+g blackrock depths h 4 | LF1 healer BRD
+g scholomance d * | LF2 dps scholo
+g upper blackrock t * | LF tank UBRS
+g lower blackrock h * | LF heals LBRS
+g dire maul t * | LFM DM east need tank
+g dire maul * * | lfm dm
+g dire maul h * | LF1M DMW need healz
+g dire maul d * | LFM DMN tribute run need dps
+g zul'farrak t * | LFM ZF need tank
+g maraudon h * | LFM mara princess need heals
+g maraudon * * | lf2m mara inner
+g sunken temple t * | LFM ST need tank
+g scarlet monastery d * | LFM SM cath need dps
+g scarlet monastery t * | LF tank SM arm
+g scarlet monastery h * | LFM SM lib need healer
+g scarlet monastery * * | lfm sm gy
+g uldaman h * | LFM ulda need heals
+g razorfen downs t * | lf1m rfd tank
+g razorfen kraul * * | LF2M RFK
+g gnomeregan d * | LFM gnomer need 2 dps
+g blackfathom * * | LF3M BFD
+g stockade * * | lfm stocks
+g shadowfang t * | LFM SFK need tank
+g wailing caverns h * | LFM WC need healer
+g ragefire * * | lfm rfc
+g deadmines t * | LFM deadmines need tank
+g stratholme d * | LFM strat UD need 2 dps
+g stratholme t * | LFM strat live need tank
+g stratholme h * | LF1M baron run need heals
+g blackrock depths d * | LFM BRD emp run need dps
+g blackrock depths * * | LF2M BRD jailbreak
+g blackrock depths h * | LFM BRD lava run need heals, can summon
+g blackrock depths t * | LF tank BRD arena, can summon
+g upper blackrock * * | LFM guild run UBRS need 2 more
+g blackrock depths th * | lfm brd need tank & heals
+g blackrock depths d * | LFM BRD dps x2
+g blackrock depths d * | LFM BRD 2x dps
+g scholomance h * | LFM scholo need resto
+g scholomance h * | LFM scholo need hps
+g stratholme t * | LFM strat need tnk
+g stratholme t * | LFM strat need MT
+g scholomance h * | LFM scholo need priest
+g scholomance h * | need druid for scholo
+g scholomance h * | LF shaman heals scholo
+g stratholme t * | need warrior tank for strat
+g upper blackrock d * | LF mage UBRS
+g upper blackrock d * | LFM UBRS need lock and hunter
+g lower blackrock d * | LF rogue LBRS
+g blackrock depths * 4 | LFM BRD 4/5
+g zul'farrak * 2 | LFM ZF 2/5
+g upper blackrock * 7 | LFM UBRS 7/10
+g * * * | LFM1 strat
+g * * * | LF 1M scholo
+g * * * | LF 2M BRD
+g blackrock depths * * | need 1 more for BRD
+g blackrock depths * * | 1 more for BRD
+g stratholme * * | need 2 for strat
+g blackrock depths h * | LF heal BRD
+g blackrock depths d * | LF rdps BRD
+g blackrock depths d * | LF mdps BRD
+g blackrock depths d * | LF caster BRD
+g blackrock depths d * | LF melee BRD
+g blackrock depths d * | LF ranged dps BRD
+g blackrock depths d * | LF dd BRD
+g molten core * * | LFM MC
+g onyxia * * | LFM ony
+g onyxia * * | LFM onyxia need tank
+g zul'gurub * * | LFM ZG
+g blackwing * * | LFM BWL
+g ahn'qiraj * * | LFM AQ20
+g krol * * | LFM Krol need heals
+g krol * * | LFM krol dok
+g thanes * * | LFM Thanes need tank
+g lordaeron * * | LFM Lordaeron need dps
+g lordaeron * * | LF2M ruins
+g blackmaw * * | LFM Blackmaw need heals
+g * - * | LF2M Hogger quest
+g * * * | LFM elite quest in arathi
+g * * * | LF2M quest group, all welcome
+p dire maul t 1 | LFG |cffffffff|Hitem:1|h[Dire Maul]|h|r east as tank
+p blackrock depths h 1 | healer LFG BRD
+p stratholme t 1 | tank LFG strat
+p scholomance d 1 | mage LFG scholo
+p upper blackrock d 1 | LFG UBRS as dps
+p * * 1 | LF group
+p * * 1 | LFG any dungeon
+p * h 1 | resto druid LFG
+p * t 1 | prot warrior LF group
+p scholomance h 1 | priest LFG scholo
+p * * 1 | looking for group
+p * * 1 | looking for a group, any dungeon 50+
+p blackrock depths * 1 | lf grp BRD
+p zul'farrak d 1 | LFG ZF dps
+p * * 1 | LF party for elites
+g blackrock depths h * | suche Heiler für BRD
+g stratholme t * | suchen Tank für Strat
+p * h 1 | Heiler sucht Gruppe
+g scholomance d * | cherche dps pour scholo
+p * * 1 | cherche groupe
+g blackrock depths h * | busco healer para BRD
+g stratholme t * | buscamos tank strat
+p * * 1 | procuro grupo
+g blackrock depths h * | ищу хила в БРД
+g * t * | нужен танк
+g * h * | нужна хилка
+g * d * | нужны дд
+g * * * | лфм страт
+none | WTS [Lionheart Helm] LFM buyers
+none | <Pumpers> recruiting, LFM raiders
+none | need help with a quest pls
+none | anyone know where the AH is
+none | WTS summons to Dire Maul 2g each
+none | selling summons, whisper me
+none | WTS port to Darnassus 1g
+none | WTB [Arcanite Bar] 5g each
+none | LFW enchanter, your mats
+none | LF enchanter for crusader
+none | WTS boost BRD 10g
+none | selling carries strat 20g
+none | <Night Watch> is recruiting all classes
+none | guild LF members, 50+, raids friday
+none | LF guild, casual
+none | portals 1g, whisper me
+none | anyone selling linen?
+none | lol
+none | where do I train mounts
+none | WTT [Devilsaur Leggings]
+none | need 5g for my mount pls
+none | LF crafter for [Lionheart Helm]
+none | buying [Black Lotus] 2g
+none | need someone to open a lockbox
+none | WTS [Righteous Orb] 1g each
+none | gz
+none | anyone up for wsg?
+none | ty for the group
+none | is the server down?
+none | recruiting healers for MC raids, apply on our discord
+none | selling DM tribute runs 10g
+none | WTS Strat UD carry 15g
+# the newer named colour codes in links (|cnIQ3: = quality 3)
+g blackrock depths h * | LFM BRD need heals, |cnIQ3:|Hitem:11810::::::::60:::::::|h[Force of Will]|h|r reserved
+p * d 1 | mage LFG, have |cnIQ4:|Hitem:12590::::::::60:::::::|h[Felstriker]|h|r
+none | WTS |cnIQ3:|Hitem:16712::::::::60:::::::|h[Shadowcraft Gloves]|h|r 50g

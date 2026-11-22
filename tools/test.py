@@ -46,12 +46,20 @@ check("peer exchange roundtrip", kx == "X1" and #dx.peers == 2 and dx.peers[1].n
 check("peer exchange rejects junk", P.parse("X1;") == nil and P.parse("X1;a:nan") == nil)
 check("hello carries version", select(2, P.parse(P.hello(1, 2))).version == P.VERSION)
 check("old hello still parses", select(2, P.parse("H1;47;55")).version == "")
+-- a test build shows the last released version to others (what 0.6.2 compares), its own after it
+local hf = {} for x in (P.hello(47, 60) .. ";"):gmatch("([^;]*);") do hf[#hf + 1] = x end
+check("others see the released version", hf[4] == (P.isPrerelease(P.VERSION) and P.RELEASED or P.VERSION) and hf[5] == P.VERSION)
+check("test build: 0.6.3 reads the real one", select(2, P.parse(P.hello(47, 60))).version == P.VERSION)
+check("released versions aren't prereleases", not P.isPrerelease("0.6.2-beta") and not P.isPrerelease("0.7.0") and P.isPrerelease("0.6.3-test") and P.isPrerelease("1.0.0-dev"))
 check("version number", P.versionNumber("0.6.0-test") == 600 and P.versionNumber("1.2.10") == 10210 and P.versionNumber("x") == nil)
 check("refresh rule", P.isRefresh({seq=1, got=1000}, {seq=1, age=0}, 1100) and not P.isRefresh({seq=1, got=1000}, {seq=1, age=0}, 1020) and not P.isRefresh(nil, {seq=1}, 5))
 local bq = P.listing{leader="Pvp P", seq=1, shard=61, level=60, size=1, age=0, hops=0, class="WARRIOR", need=0, cat=P.BGQ_OFFER, acts={40}, title="", note=""}
 local kb, lb = P.parse(bq)
 local gk, gl = P.parse(P.groupListing{leader="Lead L", seq=2, shard=47, level=55, size=3, age=0, hops=0, class="PRIEST", need=4, cat=2, acts={30}, title="", note="x", spots={ P.spot(4) }})
 check("group listing roundtrip", gk == "G1" and gl.leader == "Lead L" and gl.acts[1] == 30 and #gl.spots == 1)
+local mk, ml = P.parse(P.listing{leader="Lead L", seq=2, shard=47, level=55, size=3, age=0, hops=0, class="PRIEST", need=4, cat=2, acts={30}, title="", note="x", members={ {class="PRIEST", role=2}, {class="WARRIOR", role=1}, {class="MAGE", role=0} }})
+check("members travel with a listing", mk == "L1" and ml.members and #ml.members == 3 and ml.members[2].class == "WARRIOR" and ml.members[2].role == 1 and ml.spots and #ml.spots == 0)
+check("no members: nothing extra", select(2, P.parse(P.listing{leader="Solo S", seq=1, shard=47, level=55, size=1, age=0, hops=0, class="MAGE", need=4, cat=2, acts={30}, title="", note=""})).members == nil)
 check("group unlisted and ask", P.parse(P.groupUnlisted(5)) == "G0" and select(2, P.parse(P.groupUnlisted(5))).seq == 5 and P.parse(P.groupAsk()) == "GQ")
 -- other shards' Group Finder digests: spaced names, split into parts under the limit, all back
 local many = {}
@@ -276,7 +284,7 @@ check("lf2m strat", p and p.kind == "group" and nameOf(p) == "Stratholme" and p.
 p = N.parse("LFG |cffffffff|Hitem:1|h[Dire Maul]|h|r east as tank")
 check("lfg player dme", p and p.kind == "player" and nameOf(p) == "Dire Maul" and p.need == 1 and p.size == 1)
 p = N.parse("lfm dm")
-check("dm alone is deadmines", p and nameOf(p) == "The Deadmines")
+check("dm alone at 58 is dire maul", p and nameOf(p) == "Dire Maul")
 p = N.parse("LFM DM east need tank")
 check("dm east is dire maul", p and nameOf(p) == "Dire Maul")
 check("wts skipped", N.parse("WTS [Lionheart Helm] LFM buyers") == nil)
@@ -319,7 +327,7 @@ N.expire()
 check("switching off clears", next(OpenGroup.nearby) == nil)
 -- a blocked action right after our search is the search: searches stop; another addon's block is ignored
 OpenGroup.print = function(...) PRINTED[#PRINTED+1] = table.concat({...}, " ") end
-local onEvent = NB_HANDLERS[#NB_HANDLERS]
+local onEvent = N.onEvent or NB_HANDLERS[#NB_HANDLERS]
 onEvent(nil, "ADDON_ACTION_BLOCKED", "SomeOtherAddon", "UNKNOWN()")
 check("other addons' blocks ignored", N.blocked == nil and not N.noSearch)
 N.searchAt, NB_T = 100, 100.2
@@ -373,9 +381,12 @@ check("sort by leader reversed", rows[1].leader == "F")
 L.sortRows(rows, "age", false)
 check("sort by age: newest first", rows[1].got == 999)
 local groups = L.groupRows({ brd, rfc, tankOnly, free }, "act")
+local soloBrd = row{ leader = "S", level = 58, size = 1, need = 1, acts = {30}, shard = 55, got = 999, title = "", note = "" }
+local mixed = L.groupRows({ soloBrd, brd }, "act")
+check("in an activity, groups before solo players", mixed[1].rows[1].leader == "A" and mixed[1].rows[2].leader == "S")
 check("group by activity: nearest first, counts", groups[1].text == "Blackrock Depths" and #groups[1].rows == 2 and groups[#groups].text == "Ragefire Chasm")
 local shards = L.groupRows({ free, rfc, brd, far }, "shard")
-check("group by shard: other shards, yours, finder, chat", shards[1].text == "Shard 55" and shards[2].text == "Your shard" and shards[3].text == "Group Finder" and shards[4].text == "LFG chat")
+check("group by shard: other shards, yours, finder, chat", shards[1].text == "Chat 55" and shards[2].text == "Your server" and shards[3].text == "Group Finder" and shards[4].text == "LFG chat")
 check("no grouping", L.groupRows({ brd }, "off") == nil)
 check("migrate other shards only", L.migrateBrowse({ otherOnly = true }).where == "other")
 check("migrate group finder off", L.migrateBrowse({ nearby = false }).where == "og")
@@ -383,7 +394,7 @@ local m = L.migrateBrowse({})
 check("migrate defaults", m.where == "all" and m.groupBy == "act" and m.otherOnly == nil)
 check("migrate keeps a choice", L.migrateBrowse({ where = "finder", otherOnly = true }).where == "finder")
 local narrow, wide = L.columns(380), L.columns(1000)
-check("narrow: activity still readable, extras dropped", narrow.at.act.w >= 96 and narrow.hidden.size and narrow.at.leader and narrow.at.needs)
+check("narrow: activity still readable, extras dropped", narrow.at.act.w >= 96 and narrow.hidden.age and narrow.at.leader and narrow.at.needs)
 check("wide: every column, activity takes the rest", not next(wide.hidden) and wide.at.act.w > 400)
 local last = wide.order[#wide.order]
 check("wide: columns fill the width", math.abs(last.x + last.w - 1000) < 1)
@@ -414,4 +425,10 @@ check("default width fills too", math.abs(lm.x + lm.w - 470) < 1 and mid.at.wher
 return table.concat(out, string.char(10))
 """)
 print(t); assert "FAIL" not in t
+# texture paths: a single backslash in Lua source is dropped ("Interface\\Buttons" needs two)
+import re as _re
+_B = chr(92)
+for _f, _src in src.items():
+    for _m in _re.finditer(r'"(Interface[^"]*)"', _src):
+        assert not (_B in _m.group(1) and (_B + _B) not in _m.group(1)), "single backslash in a path: " + _f + " " + _m.group(1)
 print("ALL OK")

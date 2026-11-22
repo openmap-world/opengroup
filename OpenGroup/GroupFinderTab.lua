@@ -59,13 +59,12 @@ function T.attach()
 	local ui = OpenGroup_UI
 	-- on the game's window: open OpenGroup at the same spot, above it (in or out of combat)
 	-- a square tab: the art without its ring, cropped like the game's own tab icons
-	local tab = makeTab(blizz, L.ICON_SQUARE or ICON, "OpenGroup: groups from every shard", function()
+	local tab = makeTab(blizz, L.ICON_SQUARE or ICON, "OpenGroup: groups from every server", function()
 		if not (ui and ui.win) then return end
 		local x, y = blizz:GetLeft(), blizz:GetTop()
 		if x and y then ui.win:ClearAllPoints() ui.win:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x, y) end
 		ui.win:Show()
 		if ui.win.Raise then ui.win:Raise() end
-		if L.scan and L.scan.auto then L.scan.auto(true) end
 	end)
 	-- below the lowest tab already on the window's right edge (the game's and other addons'), so
 	-- it never covers one. Anchored to the window itself at an offset worked out from where the
@@ -96,19 +95,6 @@ function T.attach()
 		for _, l in pairs(L.listings) do if time() - (l.got or 0) < 300 then n = n + 1 end end
 		badge:SetText(n > 0 and ("|cff40ff40" .. n .. "|r") or "")
 	end)
-	-- on OpenGroup's window: back to the game's Group Finder. It closes OpenGroup; the game's window
-	-- is there underneath if it was open. If it wasn't, OpenGroup can't open it (that would be the
-	-- panel manager call again), so it says which key does.
-	if ui and ui.win and ui.lastTab then
-		local back = makeTab(ui.win, "Interface\\Icons\\INV_Misc_Spyglass_02", "The game's Group Finder (this shard only)", function()
-			ui.win:Hide()
-			if not blizz:IsShown() then
-				local key = GetBindingKey and (GetBindingKey("TOGGLELFGPARENT") or GetBindingKey("TOGGLEGROUPFINDER"))
-				UIErrorsFrame:AddMessage(key and ("Press " .. key .. " to open the game's Group Finder.") or "Open the game's Group Finder from the micro menu.", 1, .82, 0)
-			end
-		end)
-		back:SetPoint("TOPLEFT", ui.lastTab, "BOTTOMLEFT", 0, -16)
-	end
 	return true
 end
 

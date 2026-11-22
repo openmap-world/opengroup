@@ -188,13 +188,13 @@ local function sideTab(key, icon, tip, prev)
 		t.Icon:SetSize(30, 30)
 		if t.SetFillToInterior then t:SetFillToInterior(true) end
 		t.tooltipText = tip
-		t:SetCustomOnMouseUpHandler(function(_, button, up) if button == "LeftButton" and up then showPage(key) L.scan.auto(false) end end)
+		t:SetCustomOnMouseUpHandler(function(_, button, up) if button == "LeftButton" and up then showPage(key) end end)
 	else
 		t = CreateFrame("CheckButton", nil, win)
 		t:SetSize(40, 40)
 		local tex = t:CreateTexture(nil, "ARTWORK") tex:SetAllPoints() tex:SetTexture(icon)
 		t:SetCheckedTexture("Interface\\Buttons\\CheckButtonHilight", "ADD")
-		t:SetScript("OnClick", function() showPage(key) L.scan.auto(false) end)
+		t:SetScript("OnClick", function() showPage(key) end)
 		t:SetScript("OnEnter", function(self) GameTooltip:SetOwner(self, "ANCHOR_RIGHT") GameTooltip:SetText(tip) GameTooltip:Show() end)
 		t:SetScript("OnLeave", GameTooltip_Hide)
 	end
@@ -232,7 +232,7 @@ refreshBtn:SetScript("OnClick", function() browse.searchClick() end)
 refreshBtn:SetScript("OnEnter", function(self)
 	GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
 	GameTooltip:SetText(self:GetText())
-	GameTooltip:AddLine("Searches the game's Group Finder on your shard, one category per click, and asks the OpenGroup players you know what's listed. The game only lets addons search when you click.", 1, 1, 1, true)
+	GameTooltip:AddLine("Searches the game's Group Finder on your server, one category per click, and asks the OpenGroup players you know what's listed. The game only lets addons search when you click.", 1, 1, 1, true)
 	GameTooltip:Show()
 end)
 refreshBtn:SetScript("OnLeave", GameTooltip_Hide)
@@ -240,18 +240,58 @@ refreshBtn:SetScript("OnLeave", GameTooltip_Hide)
 -- one row, like the game's crafting window: a search box, a Filter button (with a red X while any
 -- filter is set), and Refresh. The Filter menu holds Category, Activity, Where, Group by, All
 -- levels and Compact.
-browse.WHERE = { { "all", "All" }, { "other", "Other shards" }, { "mine", "Your shard" }, { "finder", "Group Finder" }, { "chat", "LFG chat" }, { "og", "OpenGroup players" } }
-browse.GROUPS = { { "act", "Activity" }, { "shard", "Shard" }, { "off", "Off" } }
+browse.WHERE = { { "all", "All" }, { "other", "Other servers" }, { "mine", "Your server" }, { "finder", "Group Finder" }, { "chat", "LFG chat" }, { "og", "OpenGroup players" } }
+browse.GROUPS = { { "act", "Activity" }, { "shard", "Server" }, { "off", "Off" } }
 browse.search = ""
 browse.HEADER_H = 38
 
 function browse.filtersActive()
 	local d = db() or {}
-	return filterCat ~= nil or next(filterActs) ~= nil or (d.where or "all") ~= "all" or d.allLevels == true
+	return filterCat ~= nil or next(filterActs) ~= nil or (d.where or "all") ~= "all" or d.allLevels == true or (d.showKind ~= nil)
+end
+-- a section header clicked: only that activity (again: all of them); shift: add it to the ones shown
+function browse.pickActivity(id, add)
+	if add then
+		filterActs[id] = (not filterActs[id]) or nil
+	else
+		local only = filterActs[id] and next(filterActs, nil) == id and next(filterActs, id) == nil
+		filterActs = {}
+		if not only then filterActs[id] = true end
+	end
+	collapsed = {}
+	W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON")
+	L.onChange()
+end
+function browse.clearActivities() filterActs = {} L.onChange() end
+function browse.pickedActivities()
+	local out = {}
+	for id in pairs(filterActs) do out[#out + 1] = id end
+	table.sort(out)
+	return out
+end
+-- show this player's listing in Browse: selected, its section open, scrolled to; false if there's none
+function browse.focus(name)
+	name = L.short(name)
+	if not (L.listings[name] or L.nearby[name] or (L.remote and L.remote[name])) then return false end
+	selected = name
+	collapsed = {}
+	if not win:IsShown() then win:Show() end
+	showPage("browse")
+	L.onChange()
+	local b = browse.box
+	if b and b.ScrollToElementDataByPredicate then
+		pcall(b.ScrollToElementDataByPredicate, b, function(d) return d.l and d.l.leader == name end, ScrollBoxConstants and ScrollBoxConstants.AlignCenter)
+	end
+	return true
+end
+function browse.setShow(kind)
+	db().showKind = kind
+	if browse.showBtn then browse.showBtn:Paint() end
+	L.onChange()
 end
 function browse.resetFilters()
 	filterCat, filterActs = nil, {}
-	db().where, db().allLevels = "all", false
+	db().where, db().allLevels, db().showKind = "all", false, nil
 	W.sound("IG_MAINMENU_OPTION_CHECKBOX_OFF")
 	L.onChange()
 end
@@ -273,6 +313,8 @@ function browse.buildFilter(root)
 	local a = section("Activity")
 	if a ~= root and a.SetScrollMode then pcall(a.SetScrollMode, a, 420) end
 	local lvl = UnitLevel("player")
+	-- (buttons inside this scrolling submenu drew on top of each other on Forever: the quick picks
+	-- live in the activity picker, opened by its own entry below the submenu)
 	for _, cat in ipairs(A.load()) do
 		if (not filterCat or cat.id == filterCat) and #cat.acts > 0 then
 			if not filterCat and a.CreateTitle then a:CreateTitle(cat.name) end
@@ -282,6 +324,13 @@ function browse.buildFilter(root)
 			end
 		end
 	end
+	if root.CreateButton then
+		root:CreateButton("Pick activities (press and drag)...", function() if browse.openActivityPicker then browse.openActivityPicker() end end)
+	end
+	local sk = section("Show")
+	for _, o in ipairs({ { nil, "Groups and players" }, { "groups", "Groups only" }, { "players", "Players looking for a group" } }) do
+		sk:CreateRadio(o[2], function() return db().showKind == o[1] end, function() browse.setShow(o[1]) end)
+	end
 	local w = section("Where")
 	for _, o in ipairs(browse.WHERE) do
 		w:CreateRadio(o[2], function() return (db().where or "all") == o[1] end, function()
@@ -289,6 +338,29 @@ function browse.buildFilter(root)
 			if o[1] == "finder" or o[1] == "chat" or o[1] == "all" then db().nearby = nil end
 			L.onChange()
 		end)
+	end
+	-- the Group Finder search's languages (Search sends them; results don't say which they are)
+	local Nb = OpenGroup_Nearby
+	local lg = section("Language")
+	lg:CreateCheckbox("All languages", function() return Nb.allLanguages() end, function() db().langAll = not Nb.allLanguages() L.onChange() end)
+	local locked = Nb.lockedLanguages()
+	for _, code in ipairs(Nb.offeredLanguages()) do
+		if locked[code] then
+			lg:CreateCheckbox(Nb.languageName(code) .. GREY .. " (always)|r", function() return true end, function() end)
+		else
+			lg:CreateCheckbox(Nb.languageName(code), function() return Nb.allLanguages() or (type(db().langs) == "table" and db().langs[code] == true) end, function()
+				if Nb.allLanguages() then
+					-- unticking one from All: keep the rest
+					db().langAll = false
+					db().langs = {}
+					for _, c2 in ipairs(Nb.offeredLanguages()) do if c2 ~= code then db().langs[c2] = true end end
+				else
+					db().langs = type(db().langs) == "table" and db().langs or {}
+					db().langs[code] = (not db().langs[code]) or nil
+				end
+				L.onChange()
+			end)
+		end
 	end
 	local g = section("Group by")
 	for _, o in ipairs(browse.GROUPS) do
@@ -347,13 +419,28 @@ local chip = CreateFrame("Button", nil, browse.header)
 chip:Hide()
 
 
+-- the activities picked (a section header clicked, or the Filter menu), with an x to clear them
+browse.actLine = CreateFrame("Frame", nil, browse.content)
+browse.actLine:SetHeight(20)
+browse.actLine.text = browse.actLine:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+browse.actLine.text:SetPoint("LEFT", 0, 0)
+browse.actLine.text:SetPoint("RIGHT", -26, 0)
+browse.actLine.text:SetJustifyH("LEFT")
+browse.actLine.text:SetWordWrap(false)
+browse.actLine.x = CreateFrame("Button", nil, browse.actLine, "UIPanelCloseButton")
+browse.actLine.x:SetSize(22, 22)
+browse.actLine.x:SetPoint("RIGHT", 0, 0)
+browse.actLine.x:SetScript("OnClick", function() if browse.clearActivities then browse.clearActivities() end end)
+browse.actLine:Hide()
+
 local box = CreateFrame("Frame", nil, browse.content, "WowScrollBoxList")
+browse.box = box
 box:SetPoint("TOPLEFT", 6, -24)
 box:SetPoint("BOTTOMRIGHT", -24, 6)
 
 -- the column headers above the list: click one to sort by it, again to reverse, a third time for
 -- the default order (what suits you best first)
-browse.COL_LABELS = { cls = "", lvl = "Lvl", leader = "Leader", act = "Activity", levels = "Levels", size = "Size", needs = "Needs", where = "Where", age = "Age" }
+browse.COL_LABELS = { cls = "", lvl = "Lvl", leader = "Leader", act = "Activity", levels = "Levels", size = "Size", needs = "Group", where = "Where", age = "Age" }
 browse.colHead = CreateFrame("Frame", nil, browse.content)
 browse.colHead:SetHeight(18)
 browse.colButtons = {}
@@ -446,10 +533,15 @@ qcard.list = CreateFrame("Button", nil, qcard, "UIPanelButtonTemplate")
 qcard.list:SetSize(130, 22)
 qcard.list:SetPoint("BOTTOMRIGHT", -10, 8)
 qcard.list:SetText("List me for it")
+-- a quest just accepted, offered: show the groups for it only when asked
+qcard.show = CreateFrame("Button", nil, qcard, "UIPanelButtonTemplate")
+qcard.show:SetSize(150, 22)
+qcard.show:SetPoint("RIGHT", qcard.list, "LEFT", -6, 0)
+qcard.show:SetText("Show groups for it")
 qcard.count = qcard:CreateFontString(nil, "ARTWORK", "GameFontNormal")
 qcard.count:SetPoint("BOTTOMRIGHT", qcard.list, "TOPRIGHT", 0, 6)
 qcard.title:SetPoint("RIGHT", qcard.close, "LEFT", -6, 0)
-qcard.objs:SetPoint("RIGHT", qcard.list, "LEFT", -10, 0)
+qcard.objs:SetPoint("RIGHT", qcard.show, "LEFT", -10, 0)
 qcard:Hide()
 local bar = CreateFrame("EventFrame", nil, browse.content, "MinimalScrollBar")
 bar:SetPoint("TOPLEFT", box, "TOPRIGHT", 6, 0)
@@ -525,6 +617,16 @@ local function buildRow(row)
 	row.headBar2:SetSize(4, 18)
 	row.headBar2:SetPoint("CENTER", row.headBar, "CENTER")
 	row.headBar2:SetColorTexture(1, 0.82, 0, 1)
+	-- the - / + at the right folds the section; the rest of the bar picks the activity
+	row.headFold = CreateFrame("Button", nil, row.head)
+	row.headFold:SetSize(40, 26)
+	row.headFold:SetPoint("RIGHT", 0, 0)
+	row.headFold:SetScript("OnClick", function()
+		local d = row.data
+		if d and d.header then collapsed[d.header] = not collapsed[d.header] W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON") L.onChange() end
+	end)
+	row.headFold:SetScript("OnEnter", function(self) GameTooltip:SetOwner(self, "ANCHOR_TOP") GameTooltip:SetText("Fold this section") GameTooltip:Show() end)
+	row.headFold:SetScript("OnLeave", GameTooltip_Hide)
 	-- listing parts: a dark panel with a thin edge, warm and gold-underlined when selected
 	row.panel = CreateFrame("Frame", nil, row)
 	row.panel:SetPoint("TOPLEFT", 2, -2) row.panel:SetPoint("BOTTOMRIGHT", -2, 2)
@@ -564,7 +666,35 @@ local function buildRow(row)
 	row.note:SetTextColor(0.25, 1, 0.25)
 	row.rolesLabel = fs("GameFontHighlight")   -- the summons / queue icon in the Needs column
 	row.roles = {}
-	for i = 1, P.MAX_SPOTS do row.roles[i] = row:CreateTexture(nil, "ARTWORK") end
+	-- the Group column: five slots, members (class icon, a small role badge) then open spots
+	-- (the role wanted, with a green +)
+	row.plus, row.badge, row.glow = {}, {}, {}
+	for i = 1, 5 do
+		row.roles[i] = row:CreateTexture(nil, "ARTWORK")
+		-- a needed slot glows (green, gold when it wants a role you play), softly pulsing
+		-- a soft round glow, a little larger than the icon (no square fill)
+		row.glow[i] = row:CreateTexture(nil, "BORDER")
+		row.glow[i]:SetTexture(DISC)
+		row.glow[i]:SetPoint("CENTER", row.roles[i], "CENTER", 0, 0)
+		row.glow[i]:SetSize(30, 30)
+		row.glow[i]:Hide()
+		if row.glow[i].CreateAnimationGroup then
+			local g = row.glow[i]:CreateAnimationGroup()
+			local a = g:CreateAnimation("Alpha")
+			a:SetFromAlpha(1) a:SetToAlpha(0.45) a:SetDuration(0.9)
+			if g.SetLooping then g:SetLooping("BOUNCE") end
+			row.glow[i].pulse = g
+		end
+		row.badge[i] = row:CreateTexture(nil, "OVERLAY")
+		-- the member's role, small, tucked into the icon's bottom-right corner
+		row.badge[i]:SetSize(9, 9)
+		row.badge[i]:SetPoint("BOTTOMRIGHT", row.roles[i], "BOTTOMRIGHT", 1, -1)
+		row.badge[i]:Hide()
+		row.plus[i] = row:CreateFontString(nil, "OVERLAY", "GameFontGreenSmall")
+		row.plus[i]:SetPoint("CENTER", row.roles[i], "BOTTOMRIGHT", -1, 2)
+		row.plus[i]:SetText("+")
+		row.plus[i]:Hide()
+	end
 	row.askCheck = row:CreateTexture(nil, "OVERLAY")
 	row.askCheck:SetSize(14, 14)
 	row.askCheck:SetAtlas("groupfinder-icon-greencheckmark")
@@ -592,7 +722,12 @@ local function buildRow(row)
 			if d.l then selected = d.l.leader L.onChange() browse.personMenu(self, d.l.leader, d.l) end
 			return
 		end
-		if d.header then collapsed[d.header] = not collapsed[d.header] W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON") L.onChange() return end
+		if d.header then
+			local id = tonumber(tostring(d.header):match("^a(%d+)$"))
+			if id and button ~= "RightButton" then browse.pickActivity(id, IsShiftKeyDown and IsShiftKeyDown()) return end
+			collapsed[d.header] = not collapsed[d.header] W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON") L.onChange() return
+		end
+		if not d.l then return end
 		selected = d.l.leader
 		W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON")
 		L.onChange()
@@ -603,15 +738,34 @@ local function buildRow(row)
 	end)
 	row:SetScript("OnEnter", function(self)
 		local d = self.data
+		if d and d.header and tostring(d.header):match("^a%d+$") then
+			GameTooltip:SetOwner(self, "ANCHOR_TOP")
+			GameTooltip:SetText("Click to show only this")
+			GameTooltip:AddLine("Shift-click to add it to what's shown. Click again to show everything. The - at the right folds the section.", 1, 1, 1, true)
+			GameTooltip:Show()
+			return
+		end
 		if not d or not d.l then return end
 		local l, r = d.l, d.r
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 		GameTooltip:AddLine(listingTitle(l), 1, 1, 1, true)
 		if #(l.acts or {}) > 1 then
-			for _, id in ipairs(l.acts) do GameTooltip:AddLine("  " .. (A.name(id) or ("activity " .. id)), .8, .8, .8) end
+			GameTooltip:AddLine("Queued for:", 1, .82, 0)
+			for _, id in ipairs(l.acts) do GameTooltip:AddLine("  " .. (A.name(id) or ("activity " .. id)) .. (r and id == r.act and "  <" or ""), .8, .8, .8) end
 		end
 		if r and r.min > 0 then GameTooltip:AddLine(("Levels %s"):format(r.min == r.max and r.min or (r.min .. " to " .. r.max)), .8, .8, .8) end
 		if l.note ~= "" then GameTooltip:AddLine(l.note, .25, 1, .25, true) end
+		-- the Roles column, in words: what a group still needs, what a solo player plays
+		if r and r.kind ~= "summon" and r.kind ~= "bgq" and (l.need or 0) > 0 then
+			local names = {}
+			for _, b in ipairs(ROLES) do if has(l.need, b) then names[#names + 1] = W.ROLE_NAME[b] end end
+			GameTooltip:AddLine((r.kind == "group" and "Looking for: " or "Queued as: ") .. table.concat(names, ", "), .8, .8, .8)
+			if r.kind == "group" then
+				for _, sl in ipairs(browse.slotsOf(l, r)) do
+					if browse.slotWantsMe(sl) then GameTooltip:AddLine("This group needs you (" .. W.ROLE_NAME[sl.role] .. ")", 1, .82, .2) break end
+				end
+			end
+		end
 		if l.size > 1 and type(l.spots) == "table" and #l.spots > 0 then
 			GameTooltip:AddLine(" ")
 			GameTooltip:AddLine(myFit(l.spots) and "Open spots (you fit one)" or "Open spots", 1, .82, 0)
@@ -619,14 +773,14 @@ local function buildRow(row)
 		end
 		GameTooltip:AddLine(" ")
 		GameTooltip:AddLine(("%s%s|r%s"):format(W.classColor(l.class), L.short(l.leader), l.level > 0 and ("  level " .. l.level) or ""))
-		GameTooltip:AddLine(("Shard %d   |   %s"):format(l.shard, l.size <= 1 and "solo" or l.sizeGuess and "a group" or (l.size .. " in group")), .8, .8, .8)
-		if l.src == "remote" then GameTooltip:AddLine(("Seen in the Group Finder on shard %d by %s, %s ago"):format(l.shard, l.reporter or "?", ago(time() - (l.got or time()))), .5, .5, .5, true)
-		elseif l.src == "remotechat" then GameTooltip:AddLine(("Posted in LookingForGroup on shard %d, passed on by %s, %s ago"):format(l.shard, l.reporter or "?", ago(time() - (l.got or time()))), .5, .5, .5, true)
-		elseif l.src == "finder" then GameTooltip:AddLine("Listed in the game's Group Finder (your shard only)", .5, .5, .5)
-		elseif l.src == "chat" then GameTooltip:AddLine(("Posted in %s chat (your shard only)"):format(l.chan or "a"), .5, .5, .5)
+		GameTooltip:AddLine(("%s   |   %s"):format(OpenGroup_Nearby.whereTip(l.shard), l.size <= 1 and "solo" or l.sizeGuess and "a group" or (l.size .. " in group")), .8, .8, .8)
+		if l.src == "remote" then GameTooltip:AddLine(("Seen in the Group Finder on " .. L.CHAN .. " %d by %s, %s ago"):format(l.shard, l.reporter or "?", ago(time() - (l.got or time()))), .5, .5, .5, true)
+		elseif l.src == "remotechat" then GameTooltip:AddLine(("Posted in LookingForGroup on " .. L.CHAN .. " %d, passed on by %s, %s ago"):format(l.shard, l.reporter or "?", ago(time() - (l.got or time()))), .5, .5, .5, true)
+		elseif l.src == "finder" then GameTooltip:AddLine("Listed in the game's Group Finder (your server only)", .5, .5, .5)
+		elseif l.src == "chat" then GameTooltip:AddLine(("Posted in %s chat (your server only)"):format(l.chan or "a"), .5, .5, .5)
 		else GameTooltip:AddLine(l.hops == 0 and "Heard from them directly" or ("Passed on by %s"):format(L.short(l.via)), .5, .5, .5) end
 		if l.unconfirmed then GameTooltip:AddLine("Not confirmed by the leader yet. OpenGroup is checking with them.", 1, .6, .2, true) end
-		if r and r.dim then GameTooltip:AddLine(l.size >= 5 and "This group is full." or "They don't need a role you play.", 1, .5, .3) end
+		if r and r.dim then GameTooltip:AddLine(l.size >= 5 and "This group is full." or "Doesn't need your role.", 1, .5, .3) end
 		GameTooltip:AddLine(l.size > 1 and "Double-click to ask to join." or "Double-click to invite.", 0, 1, 0)
 		GameTooltip:Show()
 	end)
@@ -656,10 +810,10 @@ local function layoutRow(row, compact)
 	put(row.class, "cls") put(row.level, "lvl") put(row.name, "leader") put(row.act, "act")
 	put(row.levels, "levels") put(row.size, "size") put(row.shard, "where") put(row.age, "age")
 	local needs = cols.at.needs
-	local s = compact and 15 or 17
+	local s = compact and 18 or 22
 	for i, t in ipairs(row.roles) do
 		t:SetSize(s, s)
-		at(t, "LEFT", row, "LEFT", 10 + needs.x + (i - 1) * (s + 2), y)
+		at(t, "LEFT", row, "LEFT", 10 + needs.x + (i - 1) * (s + 3), y)
 	end
 	at(row.rolesLabel, "LEFT", row, "LEFT", 10 + needs.x, y)
 	local actCol = cols.at.act
@@ -668,9 +822,71 @@ local function layoutRow(row, compact)
 	row.note:SetWidth(math.max(60, (noteRight.x + noteRight.w) - actCol.x))
 end
 
+local QUESTION_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
+-- a plain white disc (the round portrait mask every client has): tinted, it's the needed-slot ring
+-- behind a round role icon, and the dim round empty slot
+local DISC = "Interface\\CHARACTERFRAME\\TempPortraitAlphaMask"
+-- what goes in the Group column: { {kind = "member"|"unknown"|"open"|"any", class, role}, text = "solo"|"12/40"|nil }
+function browse.slotsOf(l, r)
+	local out = {}
+	if r.kind == "summon" or r.kind == "bgq" then return out end
+	local size = l.size or 1
+	if size > 5 then
+		out.text = ("%d/%d"):format(size, size <= 10 and 10 or size <= 20 and 20 or 40)
+		return out
+	end
+	if r.kind == "player" then
+		-- a solo player: "LFG" and the roles they play, big
+		for _, b in ipairs(ROLES) do if has(l.need or 0, b) then out[#out + 1] = { kind = "play", role = b } end end
+		out.text = "LFG"
+		return out
+	end
+	-- members: who we know, else the leader and "?" for the rest
+	local members = type(l.members) == "table" and l.members or nil
+	if members then
+		for _, m in ipairs(members) do if #out < 5 then out[#out + 1] = { kind = m.class and "member" or "unknown", class = m.class, role = m.role } end end
+	else
+		out[1] = { kind = "member", class = l.class, role = 0 }
+		for _ = 2, math.min(size, 5) do out[#out + 1] = { kind = "unknown" } end
+	end
+	-- open spots: the ones set; else, when we know the members' roles, what a party of 1 tank,
+	-- 1 healer and 3 damage is short of (two damage missing: two slots); else one per role wanted
+	local spots = (type(l.spots) == "table" and #l.spots > 0) and l.spots or nil
+	if spots then
+		for _, sp in ipairs(spots) do if #out < 5 then out[#out + 1] = { kind = "open", role = sp.role, class = sp.class } end end
+	else
+		local have, known = { [1] = 0, [2] = 0, [4] = 0 }, members ~= nil
+		for _, m in ipairs(members or {}) do
+			if (m.role or 0) > 0 and have[m.role] then have[m.role] = have[m.role] + 1 else known = false end
+		end
+		if known then
+			local want = { [1] = 1 - have[1], [2] = 1 - have[2], [4] = 3 - have[4] }
+			for _, b in ipairs(ROLES) do for _ = 1, math.max(0, want[b]) do if #out < 5 then out[#out + 1] = { kind = "open", role = b } end end end
+		else
+			for _, b in ipairs(ROLES) do if has(l.need or 0, b) and #out < 5 then out[#out + 1] = { kind = "open", role = b } end end
+		end
+	end
+	while #out < 5 do out[#out + 1] = { kind = "any" } end
+	-- in words: "Needs Heal, 2 DPS"
+	local n = { [1] = 0, [2] = 0, [4] = 0 }
+	for _, sl in ipairs(out) do if sl.kind == "open" and n[sl.role or 0] then n[sl.role] = n[sl.role] + 1 end end
+	local words = {}
+	for _, b in ipairs(ROLES) do
+		if n[b] > 0 then words[#words + 1] = (n[b] > 1 and (n[b] .. " ") or "") .. (b == 1 and "Tank" or b == 2 and "Heal" or "DPS") end
+	end
+	out.needs = #words > 0 and ("Needs " .. table.concat(words, ", ")) or nil
+	return out
+end
+-- does this open slot want a role we play?
+function browse.slotWantsMe(sl)
+	return sl and sl.kind == "open" and (sl.role or 0) > 0 and has(myRoles(), sl.role)
+end
+
 local function setListingShown(row, on)
 	for _, r in ipairs({ row.bg, row.name, row.level, row.act, row.levels, row.size, row.note, row.shard, row.rolesLabel, row.age }) do r:SetShown(on) end
 	for _, t in ipairs(row.roles) do t:SetShown(on) end
+	if not on then for _, p in ipairs(row.plus or {}) do p:Hide() end for _, b in ipairs(row.badge or {}) do b:Hide() end for _, g in ipairs(row.glow or {}) do g:Hide() end end
+	if row.subText then row.subText:Hide() end
 	if not on then row.class:Hide() row.sel:Hide() row.askCheck:Hide() row.hl:SetAlpha(0) else row.hl:SetAlpha(0.5) end
 	row.head:SetShown(not on)
 	row.headSign:Hide() row.headBar2:SetShown(false)
@@ -689,6 +905,18 @@ local function fillRow(row, d)
 		setListingShown(row, false)
 		row.headText:SetText(d.text .. "  " .. GREY .. "(" .. d.count .. ")|r")
 		row.headBar2:SetShown(collapsed[d.header] == true)
+		row.hl:SetAlpha(0.3)
+		return
+	end
+	if d.sub then
+		setListingShown(row, false)
+		row.head:Hide()
+		if not row.subText then
+			row.subText = row:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+			row.subText:SetPoint("LEFT", 16, 0)
+		end
+		row.subText:SetText(d.sub)
+		row.subText:Show()
 		return
 	end
 	setListingShown(row, true)
@@ -730,30 +958,68 @@ local function fillRow(row, d)
 	row.note:SetText(note)
 	row.note:SetShown(not compact and note ~= "")
 	row.shard:SetText((r.where == "finder" and (GREY .. "Group Finder|r") or r.where == "chat" and (GREY .. (l.chan or "LFG chat") .. "|r")
-		or r.where == "mine" and (GREY .. "Your shard|r") or (GOLD .. "Shard " .. l.shard .. "|r")) .. (l.unconfirmed and (GREY .. " ?|r") or "")
+		or r.where == "mine" and (GREY .. "Your server|r") or (GOLD .. OpenGroup_Nearby.whereText(l.shard) .. "|r"))
 		.. (r.gf and (GREY .. " GF|r") or ""))
 	if r.chatPost then row.shard:SetText(GOLD .. "LFG " .. l.shard .. "|r") end
-	-- Needs: one icon per open spot (the class where one is set), else the role bits; groups show
-	-- what they want, players the roles they play
-	local icons = {}
-	local spots = (l.size > 1 and type(l.spots) == "table" and #l.spots > 0) and l.spots or nil
-	if spots then
-		for _, sp in ipairs(spots) do icons[#icons + 1] = { role = sp.role, class = sp.class } end
-	elseif not (summon or bgq) then
-		for _, b in ipairs(ROLES) do if has(l.need, b) then icons[#icons + 1] = { role = b } end end
-	end
+	-- Group: up to five slots. Members first (the leader, then the others: class icon with a role
+	-- badge, "?" where we don't know who), then the open spots (the role wanted, with a green +),
+	-- then any other free places (dim). A solo player: one slot and "solo". Raids: "12/40".
+	local slots = browse.slotsOf(l, r)
+	local calm = db().reduceMotion == true
 	for k, t in ipairs(row.roles) do
-		local ic = icons[k]
-		if ic then
-			W.spotIcon(t, ic.role, ic.class)
-			t:SetAlpha((not spots and d.match and not has(L.mine and L.mine.need or 0, ic.role)) and 0.3 or 1)
+		local sl = slots[k]
+		local badge, plus, glow = row.badge[k], row.plus[k], row.glow[k]
+		badge:Hide() plus:Hide() glow:Hide()
+		plus:SetText("+") plus:SetTextColor(0.25, 1, 0.25) plus:ClearAllPoints() plus:SetPoint("CENTER", t, "BOTTOMRIGHT", -1, 2)
+		if glow.pulse then glow.pulse:Stop() end
+		if sl then
+			t:SetTexCoord(0, 1, 0, 1) t:SetDesaturated(false) t:SetVertexColor(1, 1, 1) t:SetAlpha(1)
+			if sl.kind == "member" then
+				if sl.class and W.setClassIcon(t, sl.class) then
+					t:SetAlpha(0.6)
+				else
+					-- a member whose class we don't know (the leader of a passed-on group): the dim round "?"
+					t:SetTexture(DISC) t:SetVertexColor(0.45, 0.42, 0.38) t:SetAlpha(0.3)
+					plus:SetText("?") plus:SetTextColor(0.7, 0.7, 0.7) plus:ClearAllPoints() plus:SetPoint("CENTER", t, "CENTER", 0, 0) plus:Show()
+				end
+				if (sl.role or 0) > 0 and W.ROLE_ATLAS[sl.role] then badge:SetAtlas(W.ROLE_ATLAS[sl.role]) badge:Show() end
+			elseif sl.kind == "unknown" then
+				-- someone we don't know yet: a dim round slot with a faint grey "?"
+				t:SetTexture(DISC) t:SetVertexColor(0.45, 0.42, 0.38) t:SetAlpha(0.3)
+				plus:SetText("?") plus:SetTextColor(0.7, 0.7, 0.7) plus:ClearAllPoints() plus:SetPoint("CENTER", t, "CENTER", 0, 0) plus:Show()
+			elseif sl.kind == "play" then
+				t:SetAtlas(W.ROLE_ATLAS[sl.role])
+			elseif sl.kind == "open" then
+				W.spotIcon(t, sl.role, sl.class)
+				local mine = browse.slotWantsMe(sl)
+				glow:SetVertexColor(mine and 1 or 0.3, mine and 0.8 or 1, mine and 0.2 or 0.35, 1)
+				glow:SetSize(compact and 24 or 29, compact and 24 or 29)
+				glow:Show()
+				if glow.pulse and not calm then glow.pulse:Play() end
+			else
+				-- a free place anyone could take: a dim round slot
+				t:SetTexture(DISC) t:SetVertexColor(0.45, 0.42, 0.38) t:SetAlpha(0.18)
+			end
 			t:Show()
 		else
 			t:Hide()
 		end
 	end
+	-- the note line starts with what the group needs, in words
+	if slots.needs and not compact then
+		row.note:SetText(GREEN .. slots.needs .. "|r" .. (note ~= "" and (GREY .. "  -  |r" .. note) or ""))
+		row.note:Show()
+	end
+	row.size:SetText("")
 	if summon or bgq then
 		row.rolesLabel:SetText(("|T%s:16|t"):format(summon and SUMMON_ICON or BGQ_ICON))
+		row.rolesLabel:Show()
+	elseif slots.text then
+		-- after the slots in use ("solo"), or alone ("12/40")
+		local n = #slots
+		row.rolesLabel:ClearAllPoints()
+		if n > 0 then row.rolesLabel:SetPoint("LEFT", row.roles[n], "RIGHT", 6, 0) else row.rolesLabel:SetPoint("LEFT", row.roles[1], "LEFT", 0, 0) end
+		row.rolesLabel:SetText(GREY .. slots.text .. "|r")
 		row.rolesLabel:Show()
 	else
 		row.rolesLabel:Hide()
@@ -766,7 +1032,7 @@ local function fillRow(row, d)
 	row.mark:SetShown(isSel)
 	row.panel:SetEdgeColor(isSel and 0.85 or 0.36, isSel and 0.68 or 0.29, isSel and 0.3 or 0.2, 1)
 	-- the strip on the left: a match for your listing or a spot you fit (green), summons (purple),
-	-- queues (red), your shard's Group Finder and chat (blue), another shard (gold), yours (grey)
+	-- queues (red), your server's Group Finder and chat (blue), another shard (gold), yours (grey)
 	if d.match then row.accent:SetColorTexture(0.25, 1, 0.25, 0.95)
 	elseif r.fit then row.accent:SetColorTexture(0.4, 0.85, 0.4, 0.8)
 	elseif summon then row.accent:SetColorTexture(0.62, 0.4, 1, 0.9)
@@ -796,6 +1062,7 @@ local view = CreateScrollBoxListLinearView()
 view:SetElementExtentCalculator(function(_, d)
 	local c = db().compact == true
 	if d.header then return c and COMPACT_HEAD_H or HEAD_H end
+	if d.sub then return 18 end
 	return c and COMPACT_ROW_H or ROW_H
 end)
 view:SetElementInitializer("Button", fillRow)
@@ -815,6 +1082,11 @@ countText:SetPoint("CENTER")
 local function selectedListing() return selected and (L.listings[selected] or L.nearby[selected] or (L.remote and L.remote[selected])) end
 
 local function openWhisper(name, text)
+	-- in combat, leave the chat box alone: OpenGroup's own Whispers tab instead
+	if InCombatLockdown and InCombatLockdown() then
+		if browse.openWhisper then browse.openWhisper(name) end
+		return
+	end
 	local tell = ChatFrame_SendTell or (ChatFrameUtil and ChatFrameUtil.SendTell)
 	if tell then
 		tell(name)
@@ -847,7 +1119,7 @@ function browse.primary()
 		if not ok then openWhisper(l.leader, text) end
 		asked[l.leader] = true
 	elseif l.size > 1 then
-		local text = ("Hi! Inv please for %s (OpenGroup, shard %d)"):format(listingTitle(l), L.shard())
+		local text = ("Hi! Inv please for %s (OpenGroup, " .. L.CHAN .. " %d)"):format(listingTitle(l), L.shard())
 		if l.src then
 			-- they may not have OpenGroup, and they're on our shard anyway
 			local what = (#(l.acts or {}) > 0) and listingTitle(l) or "your group"
@@ -949,19 +1221,29 @@ function browse.refresh()
 	if browse.filterX then browse.filterX:SetShown(browse.filtersActive()) end
 	if browse.filterBtn.ValidateResetState then pcall(browse.filterBtn.ValidateResetState, browse.filterBtn) end
 
-	-- every listing, OpenGroup's and your shard's (Group Finder, chat), as one kind of row
+	-- every listing, OpenGroup's and your server's (Group Finder, chat), as one kind of row
 	local lvl, me = UnitLevel("player") or 0, browse.me()
 	local rows, matches, total, outside = {}, {}, 0, 0
+	-- someone queued for several: show them under the one you filtered or searched for
+	local q0 = browse.search or ""
+	local function prefer(id)
+		if filterActs[id] then return true end
+		if q0 == "" then return false end
+		return A.searchText(id):find(q0, 1, true) ~= nil
+	end
 	local function consider(l)
 		if L.ignored(l.leader) then return end
 		total = total + 1
-		local r = L.rowOf(l, myShard)
+		local r = L.rowOf(l, myShard, prefer)
 		r.dist = L.levelDistance(r, lvl)
 		r.fit, r.dim = L.rowFit(r, me)
 		if not L.whereOK(r, d0.where) or not matchesFilter(l) then return end
+		-- Show: groups only, or players looking for a group only
+		local show = d0.showKind
+		if (show == "groups" and r.kind == "player") or (show == "players" and r.kind ~= "player") then return end
 		-- the search box: names, activities and notes (searching looks at every level)
 		local q = browse.search or ""
-		if q ~= "" and not (r.leader .. " " .. tostring(r.title) .. " " .. tostring(r.groupName) .. " " .. r.note):lower():find(q, 1, true) then return end
+		if q ~= "" and not (r.leader .. " " .. tostring(r.title) .. " " .. tostring(r.groupName) .. " " .. (r.actNames or "") .. " " .. r.note):lower():find(q, 1, true) then return end
 		if matchesMine(l) then matches[#matches + 1] = r return end
 		if not d0.allLevels and q == "" and not questFilter and not filterActs[r.act or 0] and not L.inBand(r, lvl) then outside = outside + 1 return end
 		rows[#rows + 1] = r
@@ -970,7 +1252,7 @@ function browse.refresh()
 	for name, l in pairs(L.nearby) do
 		if not L.listings[name] and not L.isMe(name) then consider(l) end
 	end
-	-- other shards' Group Finder groups
+	-- other servers' Group Finder groups
 	for name, l in pairs(L.remote or {}) do
 		if not L.listings[name] and not L.nearby[name] and not L.isMe(name) then consider(l) end
 	end
@@ -998,31 +1280,46 @@ function browse.refresh()
 				text = hex .. g.text .. "|r" .. (r1.min > 0 and ("  " .. hex .. (r1.min == r1.max and r1.min or (r1.min .. "-" .. r1.max)) .. "|r") or "")
 			end
 			header(g.key, text, #g.rows)
-			if not collapsed[g.key] then add(g.rows) end
+			if not collapsed[g.key] then
+				-- groups first, then players looking for a group, each under a thin label when both are there
+				local grp, solo = {}, {}
+				for _, rr in ipairs(g.rows) do if rr.kind == "player" then solo[#solo + 1] = rr else grp[#grp + 1] = rr end end
+				if #grp > 0 and #solo > 0 then
+					items[#items + 1] = { sub = "Groups" }
+					add(grp)
+					items[#items + 1] = { sub = "Looking for a group" }
+					add(solo)
+				else
+					add(g.rows)
+				end
+			end
 		end
 	else
 		add(rows)
 	end
 	browse.cols = browse.cols or L.columns(440)
-	box:SetDataProvider(CreateDataProvider(items), ScrollBoxConstants.RetainScrollPosition)
+	-- rows or cards (the same items)
+	local cards = browse.cardsOn and browse.cardsOn() or false
+	if browse.showCards then browse.showCards(items, cards) end
+	if not cards then box:SetDataProvider(CreateDataProvider(items), ScrollBoxConstants.RetainScrollPosition) end
 
 	local peers = L.count(L.peers)
 	local shown = #rows + #matches
 	if shown > 0 then empty:Hide()
 	elseif questFilter then
-		empty:SetText("Nobody is listed for this quest yet.\n\nList yourself and anyone on any shard who picks it will find you.")
+		empty:SetText("Nobody is listed for this quest yet.\n\nList yourself and anyone on any server who picks it will find you.")
 		empty:Show()
 	elseif outside > 0 then empty:SetText(("Nothing at your level right now. %d %s outside it: tick All levels to see them."):format(outside, outside == 1 and "listing is" or "listings are")) empty:Show()
 	elseif total > 0 then empty:SetText("No groups match your filters.") empty:Show()
 	elseif peers == 0 then
 		empty:SetText("No OpenGroup players found yet.\n\nOpenGroup looks for them as you use it (friends, guild, group, " ..
-			"whispers, and a /who search now and then). Click " .. GOLD .. "Refresh|r to look again. Anything they list, on any shard, shows up here.")
+			"whispers, players around you). Settings' " .. GOLD .. "Search now|r runs a /who for more. Anything they list, on any server, shows up here.")
 		empty:Show()
 	else
 		empty:SetText(("Nobody is listed right now.\n\n%d OpenGroup %s known. List your own group in the %sList a group|r tab."):format(peers, peers == 1 and "player" or "players", GOLD))
 		empty:Show()
 	end
-	local shardText = "Your shard: " .. GOLD .. (myShard > 0 and myShard or "?") .. "|r"
+	local shardText = "You're on " .. L.CHAN .. " " .. GOLD .. (myShard > 0 and myShard or "?") .. "|r"
 	if total == 0 then countText:SetText(shardText)
 	elseif outside > 0 then countText:SetText(("%s   %d shown, %d outside your level"):format(shardText, shown, outside))
 	else countText:SetText(shardText .. "   " .. shown .. " of " .. total) end
@@ -1036,8 +1333,21 @@ function browse.refresh()
 		or l and l.cat == P.SUMMON_CAT and (asked[l.leader] and "Ask Again" or "Request Summon")
 		or l and l.size <= 1 and "Group Invite" or (l and asked[l.leader] and "Ask Again" or "Ask to Join"))
 	chip:Hide()
-	qcard:SetShown(questFilter ~= nil)
-	local top = questFilter and -92 or -4
+	local promptQ = not questFilter and browse.questPrompt or nil
+	qcard:SetShown(questFilter ~= nil or promptQ ~= nil)
+	local top = (questFilter or promptQ) and -92 or -4
+	-- "Only Blackmaw Hold, Blackrock Depths  x": the activities picked, above the list
+	local picked = browse.pickedActivities()
+	browse.actLine:SetShown(#picked > 0)
+	if #picked > 0 then
+		local names = {}
+		for _, id in ipairs(picked) do names[#names + 1] = A.name(id) or ("activity " .. id) end
+		browse.actLine.text:SetText(GOLD .. "Only|r " .. table.concat(names, ", "))
+		browse.actLine:ClearAllPoints()
+		browse.actLine:SetPoint("TOPLEFT", 10, top)
+		browse.actLine:SetPoint("RIGHT", box, "RIGHT", 0, 0)
+		top = top - 22
+	end
 	browse.colHead:ClearAllPoints()
 	browse.colHead:SetPoint("TOPLEFT", 6, top)
 	browse.colHead:SetPoint("RIGHT", box, "RIGHT", 0, 0)
@@ -1045,11 +1355,12 @@ function browse.refresh()
 	box:SetPoint("TOPLEFT", 6, top - 20)
 	box:SetPoint("BOTTOMRIGHT", -24, 6)
 	browse.layoutColumns(browse.cols)
-	if questFilter then
-		local q = questFilter
-		local c = GetQuestDifficultyColor and GetQuestDifficultyColor(q.level or 0)
+	if questFilter or promptQ then
+		local q = questFilter or promptQ
+		local qlvl = ((q.level or 0) > 0 and q.level) or Q.level(q.id) or 0
+		local c = qlvl > 0 and GetQuestDifficultyColor and GetQuestDifficultyColor(qlvl)
 		local hex = c and ("|cff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255) or GOLD
-		qcard.title:SetText(("%s[%d] %s|r"):format(hex, q.level or 0, q.title))
+		qcard.title:SetText(hex .. (qlvl > 0 and ("[" .. qlvl .. "] ") or "") .. q.title .. "|r")
 		local lines = {}
 		for i, o in ipairs(Q.objectives(q.id)) do
 			if i > 3 then break end
@@ -1058,7 +1369,15 @@ function browse.refresh()
 		if #lines == 0 then lines[1] = GREY .. (Q.onLog(q.id) and "On your quest log" or "Not on your quest log") .. "|r" end
 		qcard.objs:SetText(table.concat(lines, "\n"))
 		local onIt = shown
-		qcard.count:SetText(onIt == 0 and (GREY .. "Nobody listed yet|r") or (GREEN .. onIt .. (onIt == 1 and " player" or " players") .. " on it|r"))
+		if promptQ then
+			-- offered, not filtering: count who's listed for it anywhere
+			onIt = 0
+			for _, src in ipairs({ L.listings, L.nearby, L.remote or {} }) do
+				for _, l in pairs(src) do if l.quest == q.id then onIt = onIt + 1 end end
+			end
+		end
+		qcard.count:SetText(onIt == 0 and (GREY .. "Nobody listed yet|r") or (GREEN .. onIt .. (onIt == 1 and " player" or " players") .. " on this quest|r"))
+		qcard.show:SetShown(promptQ ~= nil)
 		qcard.list:SetEnabled(not (L.mine and L.mine.quest == q.id))
 		qcard.list:SetText(L.mine and L.mine.quest == q.id and "You're listed" or "List me for it")
 	end
@@ -1335,6 +1654,16 @@ do
 	ed.done:SetPoint("BOTTOMRIGHT", -14, 14)
 	ed.done:SetText("Done")
 	ed.done:SetScript("OnClick", function() ed:Hide() end)
+	-- look for someone to fill this spot with /who
+	ed.find = CreateFrame("Button", nil, ed, "UIPanelButtonTemplate")
+	ed.find:SetSize(110, 22)
+	ed.find:SetPoint("RIGHT", ed.done, "LEFT", -6, 0)
+	ed.find:SetText("Find players")
+	ed.find:SetScript("OnClick", function()
+		local sp = editing()
+		ed:Hide()
+		if OpenGroup_UI and OpenGroup_UI.find then OpenGroup_UI.find.open(sp) end
+	end)
 
 	function ed:Paint()
 		local sp = editing()
@@ -1472,19 +1801,20 @@ tellParty:SetScript("OnEnter", function(self)
 end)
 tellParty:SetScript("OnLeave", GameTooltip_Hide)
 
--- "Post in LookingForGroup": one line in your shard's LookingForGroup channel when you list, so
--- people without OpenGroup see it too (on by default; never repeated, never on updates)
+-- "Also list in Group Finder": the List click lists you in the game's own Group Finder too (dungeon
+-- and other activities the game knows), so players without OpenGroup see it (on by default)
 local lfgPost = CreateFrame("CheckButton", nil, list.footer, "UICheckButtonTemplate")
 lfgPost:SetSize(22, 22)
 lfgPost:SetPoint("TOP", list.footer, "TOP", -36, 0)
 local lfgPostLabel = list.footer:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
 lfgPostLabel:SetPoint("LEFT", lfgPost, "RIGHT", 2, 1)
-lfgPostLabel:SetText("Post in LFG chat")
-lfgPost:SetScript("OnClick", function(self) db().postLFG = self:GetChecked() and true or false end)
+lfgPostLabel:SetText("Also list in Group Finder")
+lfgPost:SetScript("OnClick", function(self) db().gameList = self:GetChecked() and true or false end)
 lfgPost:SetScript("OnEnter", function(self)
 	GameTooltip:SetOwner(self, "ANCHOR_TOP")
-	GameTooltip:SetText("Post in LFG chat")
-	GameTooltip:AddLine("When you list, OpenGroup also posts one line in your shard's LookingForGroup channel, so players without the addon see it too. It's posted once, not repeated.", 1, 1, 1, true)
+	GameTooltip:SetText("Also list in the game's Group Finder")
+	GameTooltip:AddLine("When you list for a dungeon or another activity the game knows, OpenGroup lists you in the game's own Group Finder too, so players without the addon on your server see it. Leave takes it down again. Solo or as the group's leader only; quests, summons and battleground queues stay OpenGroup-only.", 1, 1, 1, true)
+	GameTooltip:AddLine("To post a line in LookingForGroup chat, click Post in LFG on the listed bar.", .7, .7, .7, true)
 	GameTooltip:Show()
 end)
 lfgPost:SetScript("OnLeave", GameTooltip_Hide)
@@ -1500,7 +1830,7 @@ local function paintRoles()
 			and "Stand at a battlemaster. Invite whoever asks and click Join as Group; their queue pops wherever they are."
 			or "Someone at a battlemaster invites you and queues the group, so you can stay out in the world.")
 		tellParty:Hide() tellLabel:Hide()
-		lfgPost:SetChecked(db().postLFG ~= false)
+		lfgPost:SetChecked(db().gameList ~= false)
 		for _, b in pairs(roleButtons) do b:Show() end
 		paintSpots(false) paintAuto(false)
 		roleHint:ClearAllPoints() roleHint:SetPoint("TOPLEFT", roleButtons[P.DAMAGE], "TOPRIGHT", 22, -2)  roleHint:SetWidth(300) roleHint:SetWordWrap(true)
@@ -1517,13 +1847,13 @@ local function paintRoles()
 	local solo = GetNumGroupMembers() <= 1
 	tellParty:SetShown(not solo) tellLabel:SetShown(not solo)
 	tellParty:SetChecked(db().tellParty ~= false)
-	lfgPost:SetChecked(db().postLFG ~= false)
+	lfgPost:SetChecked(db().gameList ~= false)
 	roleTitle:SetText(solo and "Your roles" or "Looking for")
 	if step2 and step2.noteLabel then
 		step2.noteLabel:SetText(solo and "About you" or "Note")
 		step2.noteHint:SetText(solo and "e.g. casual noob, 500 dps pumper, first time in here" or "e.g. Lava run, have key, quick clear")
 	end
-	roleHint:SetText(solo and "Pick every role you'll play. Leaders on any shard see you under Players."
+	roleHint:SetText(solo and "Pick every role you'll play. Leaders on any server see you under Players."
 		or "Click a spot to set its role, class and level. Right-click makes it any.")
 	for _, b in pairs(roleButtons) do b:SetShown(solo) end
 	paintSpots(not solo) paintAuto(not solo)
@@ -1592,7 +1922,7 @@ local function layoutBanners()
 		b:SetPoint("TOPLEFT", margin + col * (tw + gap), -top - row * (th + gap))
 		local n, kind = #c.acts, catKind(c)
 		local sub = n > 0 and (n .. " " .. (NOUN[kind] or (n == 1 and "activity" or "activities"))) or ""
-		if c.summon then sub = "Sell summons on every shard" end
+		if c.summon then sub = "Sell summons on every server" end
 		if kind == "quest" then sub = (n > 0 and (n .. " zones, ") or "") .. "or any quest in your log" end
 		b:SetCategory(c.name, sub, c.summon and SUMMON_ICON or nil)
 		b:SetScript("OnClick", function() W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON") openCategory(c.id) end)
@@ -2026,7 +2356,7 @@ sHelp:SetPoint("TOPLEFT", goldBox, "BOTTOMLEFT", -6, -16)
 sHelp:SetWidth(440)
 sHelp:SetJustifyH("LEFT")
 sHelp:SetSpacing(3)
-sHelp:SetText(GREY .. "Players on every shard see \"Summon to <place>\" with your price and can request one. They'll whisper you; invite them, and remember the Ritual of Summoning needs two helpers to click. Put \"have clickers\" in the note if you do.|r")
+sHelp:SetText(GREY .. "Players on every server see \"Summon to <place>\" with your price and can request one. They'll whisper you; invite them, and remember the Ritual of Summoning needs two helpers to click. Put \"have clickers\" in the note if you do.|r")
 
 refreshActs = function()
 	local c = draft.cat and A.category(draft.cat)
@@ -2144,15 +2474,17 @@ local delistBtn = CreateFrame("Button", nil, list.footer, "UIPanelButtonTemplate
 delistBtn:SetSize(90, 24)
 delistBtn:SetPoint("RIGHT", listBtn, "LEFT", -6, 0)
 delistBtn:SetText("Delist")
-delistBtn:SetScript("OnClick", function() L.delist() end)
+delistBtn:SetScript("OnClick", function() if OpenGroup_Nearby then OpenGroup_Nearby.gameUnlist() end L.delist() end)
 local listStatus = list.footer:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 listStatus:SetPoint("LEFT", backBtn, "RIGHT", 10, 0)
 listStatus:SetPoint("RIGHT", delistBtn, "LEFT", -10, 0)
 listStatus:SetJustifyH("LEFT")
 listStatus:SetWordWrap(false)
 
+-- the List click: our listing (hidden whispers, no click needed) and, for activities the game knows,
+-- the game's own Group Finder listing: the click's one restricted call, so nothing else here
+-- (no /who, no chat channel post)
 listBtn:SetScript("OnClick", function()
-	L.scan.auto(false)
 	noteBox:ClearFocus() titleBox:ClearFocus() destBox:ClearFocus()
 	local cc = draft.cat and A.category(draft.cat)
 	local kind = catKind(cc)
@@ -2194,6 +2526,9 @@ listBtn:SetScript("OnClick", function()
 	local wireCat = (c and not c.fallback) and c.id or 0
 	if L.post(title, draft.note, draft.need, wireCat, draft.acts, nil, nil, gs) then
 		db().draft = { cat = draft.cat, acts = { unpack(draft.acts) }, need = draft.need, note = draft.note, title = draft.title }
+		if c and not c.fallback and #draft.acts > 0 and OpenGroup_Nearby then
+			OpenGroup_Nearby.gameList(draft.acts, draft.need, GetNumGroupMembers() <= 1)
+		end
 	end
 end)
 
@@ -2214,7 +2549,8 @@ function list.refresh()
 		listBtn:SetEnabled(false)
 		listStatus:SetText(GREEN .. g.leader .. " is listing this group|r" .. GREY .. "  for " .. L.titleOf(g.l) .. "|r")
 	elseif L.mine then
-		listStatus:SetText(GREEN .. "Listed|r" .. GREY .. "  on every shard you can reach|r")
+		local inGame = OpenGroup_Nearby and OpenGroup_Nearby.game.listed
+		listStatus:SetText(GREEN .. "Listed|r" .. GREY .. "  on every server you can reach" .. (inGame and ", and in the game's Group Finder" or "") .. "|r")
 	elseif peers == 0 then
 		listStatus:SetText(GREY .. "No OpenGroup players known yet: see Network.|r")
 	else
@@ -2256,14 +2592,14 @@ end
 local net = page("network")
 local netTitle = net.header:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
 netTitle:SetPoint("TOPLEFT", 4, -10)
-netTitle:SetText("Network")
+netTitle:SetText("Settings")
 local netSub = net.header:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 netSub:SetPoint("TOPLEFT", netTitle, "BOTTOMLEFT", 0, -6)
 netSub:SetWidth(400)
 netSub:SetJustifyH("LEFT")
-netSub:SetText("Listings travel between OpenGroup players in hidden whispers, so they reach every shard. Nothing shows in anyone's chat.")
+netSub:SetText("What OpenGroup shares and how it finds players. Listings travel between OpenGroup players in hidden whispers; nothing shows in anyone's chat.")
 
--- top card: your shard and how big the network is
+-- top card: your server and how big the network is
 local card = CreateFrame("Frame", nil, net.content)
 card:SetPoint("TOPLEFT", 10, -10) card:SetPoint("TOPRIGHT", -10, -10)
 card:SetHeight(74)
@@ -2293,47 +2629,79 @@ local function sectionBar(anchor, text, y)
 	return f
 end
 
--- finding players: mostly automatic now; the button runs one more /who search
-local findBar = sectionBar(card, "Finding players")
-local findHelp = net.content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-findHelp:SetPoint("TOPLEFT", findBar, "BOTTOMLEFT", 6, -8)
-findHelp:SetPoint("RIGHT", net.content, "RIGHT", -16, 0)
-findHelp:SetJustifyH("LEFT")
-findHelp:SetSpacing(3)
-findHelp:SetText("OpenGroup grows by itself: it quietly says hello to your friends, guild, group and anyone you whisper, " ..
-	"and every OpenGroup player you meet shares who they know. Clicking around OpenGroup also runs a /who search now and then (it sees every shard).")
-local scanBtn = CreateFrame("Button", nil, net.content, "UIPanelButtonTemplate")
-scanBtn:SetSize(200, 26)
-scanBtn:SetPoint("TOPLEFT", findHelp, "BOTTOMLEFT", -2, -10)
+-- settings: everything you can switch, in one place (two columns)
+do
+	local bar = sectionBar(card, "Settings")
+	net.settingsBar = bar
+	local Nb = OpenGroup_Nearby
+	local function on(key) return db()[key] ~= false end
+	local function set(key) return function(v) db()[key] = v and true or false end end
+	local items = {
+		{ "Share LFG chat from my chat number", function() return Nb.shareChat() end, set("shareChat"),
+			"LookingForGroup chat is per chat number. When you're the OpenGroup player passing on yours, its group posts go to OpenGroup players on every other number (the poster's name, the post and its age)." },
+		{ "Share Trade chat from my chat number", function() return Nb.shareTrade() end, set("shareTrade"),
+			"When you're in a city and passing on your chat number's lines, its trade ads and crafter posts go to OpenGroup players everywhere (World chat). Chatter, gold sellers, boosts and websites are never passed on." },
+		{ "Also list in the game's Group Finder", function() return on("gameList") end, set("gameList"),
+			"When you list for a dungeon or another activity the game knows, OpenGroup lists you in the game's own Group Finder too, so players without the addon see it. Solo or as leader only." },
+		{ "Tell my party when I list", function() return on("tellParty") end, set("tellParty"),
+			"When you list a group, OpenGroup says so in party chat: what it's listed for and which roles it's looking for." },
+		{ "Say hello to players around me", function() return on("nearHello") end, set("nearHello"),
+			"Players you mouse over or walk past get a quiet, hidden hello (one every 2 seconds, each at most once a session), so OpenGroup finds the users around you. Nobody sees anything." },
+		{ "Search the Group Finder in all languages", function() return Nb.allLanguages() end, function(v) db().langAll = v and true or false end,
+			"The game's search only shows your own language unless asked for more. Pick single languages in Browse's Filter menu." },
+		{ "Ask about new quests", function() return on("questPrompt") end, set("questPrompt"),
+			"When you accept a quest people group for (elite, group or dungeon quests, or ones with something to kill), Browse offers to list you for it or show the groups for it. The list doesn't change until you ask." },
+		{ "Alert me about matches while listed", function() return on("matchAlerts") end, set("matchAlerts"),
+			"While you're listed, a popup tells you when someone turns up for the same thing who fits: players with a role your group needs, or groups that need a role you play. From OpenGroup, LFG chat and the Group Finder." },
+		{ "Play a sound with alerts", function() return on("matchSound") end, set("matchSound"),
+			"The match popup plays the game's alert sound." },
+		{ "Show Browse as cards", function() return browse.cardsOn and browse.cardsOn() end, function(v) if browse.setCards then browse.setCards(v) end end,
+			"Two groups per line, with each slot spelled out (Tank, need heal, open) and Ask to join and Whisper on the card. The Cards / Rows button next to Filter switches too." },
+	}
+	local boxes = {}
+	for i, it in ipairs(items) do
+		local cb = CreateFrame("CheckButton", nil, net.content, "UICheckButtonTemplate")
+		cb:SetSize(22, 22)
+		local col, row = (i - 1) % 2, math.floor((i - 1) / 2)
+		cb:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 4 + col * 300, -6 - row * 26)
+		local lbl = net.content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+		lbl:SetPoint("LEFT", cb, "RIGHT", 2, 1)
+		lbl:SetText(it[1])
+		cb:SetScript("OnShow", function(self) self:SetChecked(it[2]()) end)
+		cb:SetScript("OnClick", function(self) it[3](self:GetChecked()) L.onChange() end)
+		cb:SetScript("OnEnter", function(self)
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:SetText(it[1])
+			GameTooltip:AddLine(it[4], 1, 1, 1, true)
+			GameTooltip:Show()
+		end)
+		cb:SetScript("OnLeave", GameTooltip_Hide)
+		boxes[i] = cb
+	end
+	net.settingsLast = boxes[#boxes - 1]
+end
+-- finding players: mostly automatic; the footer's Search now runs one more /who search
+local scanBtn = CreateFrame("Button", nil, net.footer, "UIPanelButtonTemplate")
+scanBtn:SetSize(120, 24)
 scanBtn:SetText("Search now")
 scanBtn:SetScript("OnClick", function() L.scan.click() end)
-local scanSpin = W.spinner(net.content, 20)
-scanSpin:SetPoint("LEFT", scanBtn, "RIGHT", 8, 0)
--- passing your shard's LookingForGroup posts on to OpenGroup players on other shards (on by default)
-do
-	local cb = CreateFrame("CheckButton", nil, net.content, "UICheckButtonTemplate")
-	cb:SetSize(22, 22)
-	cb:SetPoint("TOPLEFT", scanBtn, "BOTTOMLEFT", -2, -8)
-	local lbl = net.content:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-	lbl:SetPoint("LEFT", cb, "RIGHT", 2, 1)
-	lbl:SetText("Share LFG chat from my shard")
-	cb:SetScript("OnShow", function(self) self:SetChecked(db().shareChat ~= false) end)
-	cb:SetScript("OnClick", function(self) db().shareChat = self:GetChecked() and true or false end)
-	cb:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-		GameTooltip:SetText("Share LFG chat from my shard")
-		GameTooltip:AddLine("When you're the OpenGroup player passing on your shard's groups, recent LookingForGroup posts go to OpenGroup players on other shards too (the poster's name, the post and its age). Same realm and faction only.", 1, 1, 1, true)
-		GameTooltip:Show()
-	end)
-	cb:SetScript("OnLeave", GameTooltip_Hide)
-end
+scanBtn:SetScript("OnEnter", function(self)
+	GameTooltip:SetOwner(self, "ANCHOR_TOP")
+	GameTooltip:SetText("Search now")
+	GameTooltip:AddLine("OpenGroup grows by itself: it quietly says hello to your friends, guild, group, anyone you whisper and players around you, and every OpenGroup player you meet shares who they know. This runs one more /who search for OpenGroup players (it sees everyone).", 1, 1, 1, true)
+	GameTooltip:Show()
+end)
+scanBtn:SetScript("OnLeave", GameTooltip_Hide)
+local scanSpin = W.spinner(net.footer, 18)
+scanSpin:SetPoint("RIGHT", scanBtn, "LEFT", -6, 0)
 local scanText = net.content:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
-scanText:SetPoint("LEFT", scanBtn, "RIGHT", 34, 0)
+scanText:SetPoint("BOTTOMLEFT", 14, 26)
 scanText:SetPoint("RIGHT", net.content, "RIGHT", -16, 0)
 scanText:SetJustifyH("LEFT")
+scanText:SetWordWrap(false)
 
 -- who you know, by shard, newest first
-local peersBar = sectionBar(scanBtn, "OpenGroup players", -16)
+local peersBar = sectionBar(net.settingsLast, "Network", -14)
 peersBar:SetPoint("LEFT", net.content, "LEFT", 10, 0)
 local shardChips = net.content:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
 shardChips:SetPoint("TOPLEFT", peersBar, "BOTTOMLEFT", 6, -8)
@@ -2347,14 +2715,17 @@ do
 	hover:SetScript("OnEnter", function(self)
 		local Nb = OpenGroup_Nearby
 		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-		GameTooltip:SetText("Group Finder on other shards")
+		GameTooltip:SetText(L.CHAN .. " numbers and servers")
+		GameTooltip:AddLine("The number the game puts after Trade, LookingForGroup and General (Trade - City 47) isn't a server. Several numbers can share one hidden server, and with it one Group Finder, LookingForGroup channel and Trade chat. OpenGroup shows it as " .. L.CHAN .. " 47.", 1, 1, 1, true)
+		GameTooltip:AddLine(" ")
+		GameTooltip:AddLine("Your server: " .. (Nb and Nb.serverName() or "?"), .25, 1, .25, true)
 		local ov = Nb and Nb.overlapText and Nb.overlapText()
 		if ov then
-			GameTooltip:AddLine("How much of each shard's Group Finder you already see in yours:", 1, 1, 1, true)
+			GameTooltip:AddLine("How much of each number's Group Finder you already see in yours:", 1, 1, 1, true)
 			for part in ov:gmatch("[^,]+") do GameTooltip:AddLine("  " .. part:gsub("^%s+", ""), .9, .9, .9) end
-			GameTooltip:AddLine("100% means that shard shares your Group Finder.", .6, .6, .6, true)
+			GameTooltip:AddLine("Close to 100% means the same server as you; close to 0% another server.", .6, .6, .6, true)
 		else
-			GameTooltip:AddLine("Nothing passed on from another shard yet.", .8, .8, .8, true)
+			GameTooltip:AddLine("Nothing passed on from another number yet, so OpenGroup can't tell which share your server.", .8, .8, .8, true)
 		end
 		GameTooltip:Show()
 	end)
@@ -2386,6 +2757,7 @@ stats:SetJustifyH("LEFT")
 local pingBtn = CreateFrame("Button", nil, net.footer, "UIPanelButtonTemplate")
 pingBtn:SetSize(200, 24)
 pingBtn:SetPoint("RIGHT")
+scanBtn:SetPoint("RIGHT", pingBtn, "LEFT", -6, 0)
 pingBtn:SetText("Test connection to target")
 pingBtn:SetScript("OnClick", function()
 	local name = L.unitName("target")
@@ -2397,7 +2769,9 @@ versionText:SetPoint("LEFT", 6, 0)
 
 function net.refresh()
 	local myShard = L.shard()
-	shardBig:SetText("Your shard: " .. GOLD .. (myShard > 0 and myShard or "?") .. "|r")
+	local big, small = OpenGroup_Nearby.serverHeadline()
+	shardBig:SetText(GOLD .. big .. "|r")
+	net.headNote = small
 	local peers, shards, online = L.count(L.peers), {}, 0
 	local live = L.live()
 	for name, p in pairs(L.peers) do
@@ -2406,7 +2780,7 @@ function net.refresh()
 	end
 	local ns = L.count(shards)
 	peersText:SetText(("%d %s known on %d %s   %s%d heard from lately|r"):format(peers, peers == 1 and "player" or "players",
-		ns, ns == 1 and "shard" or "shards", GREEN, online))
+		ns, ns == 1 and (L.CHAN .. " number") or (L.CHAN .. " numbers"), GREEN, online) .. (net.headNote and ("   " .. GREY .. net.headNote .. "|r") or ""))
 	local s = L.scan
 	scanText:SetText(s.status or "")
 	scanBtn:SetEnabled(not s.inFlight)
@@ -2417,7 +2791,7 @@ function net.refresh()
 	local parts = {}
 	for i, k in ipairs(keys) do
 		if i > 10 then parts[#parts + 1] = GREY .. "+" .. (#keys - 10) .. " more|r" break end
-		parts[#parts + 1] = ("%sShard %d|r %s%d|r"):format(k == myShard and GREEN or GOLD, k, GREY, shards[k])
+		parts[#parts + 1] = ("%s" .. L.CHAN .. " %d|r %s%d|r"):format(OpenGroup_Nearby.sameServer(k) and GREEN or GOLD, k, GREY, shards[k])
 	end
 	shardChips:SetText(#parts > 0 and table.concat(parts, "    ") or (GREY .. "Nobody yet. Players appear here as OpenGroup finds them.|r"))
 	local recent = L.recent(#peerRows)
@@ -2429,10 +2803,12 @@ function net.refresh()
 			r.dot:SetColorTexture(fresh and 0.25 or 0.4, fresh and 1 or 0.4, fresh and 0.25 or 0.4, 1)
 			r.name:SetText(L.short(name) .. (p.level and p.level > 0 and (GREY .. "  " .. p.level .. "|r") or ""))
 			-- shard 0 means we haven't heard it yet (they passed on a listing, but no hello so far)
-			local shardText = (p.shard or 0) > 0 and ("Shard " .. p.shard) or "Shard unknown"
-			r.info:SetText(("%s%s|r   %s"):format(((p.shard or 0) > 0 and p.shard == myShard) and GREEN or (p.shard or 0) > 0 and GOLD or GREY, shardText,
+			local shardText = (p.shard or 0) > 0 and (L.CHAN .. " " .. p.shard) or (L.CHAN .. " unknown")
+			r.info:SetText(("%s%s|r   %s"):format(((p.shard or 0) > 0 and OpenGroup_Nearby.sameServer(p.shard)) and GREEN or (p.shard or 0) > 0 and GOLD or GREY, shardText,
 				live[name] and (ago(time() - (p.seen or 0)) .. " ago") or "offline"))
-			r:Show()
+			-- a short window: rows that would run into the stats line stay hidden
+			local bottom, floor = r:GetBottom(), scanText:GetTop()
+			r:SetShown(not (type(bottom) == "number" and type(floor) == "number" and bottom < floor + 4))
 		else r:Hide() end
 	end
 	local st = L.stats
@@ -2487,7 +2863,7 @@ do
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 		GameTooltip:SetText("Listed")
 		if L.mine then GameTooltip:AddLine(L.titleOf(L.mine), 1, 1, 1) end
-		GameTooltip:AddLine("OpenGroup players on every shard can see you.", .8, .8, .8, true)
+		GameTooltip:AddLine("OpenGroup players on every server can see you.", .8, .8, .8, true)
 		GameTooltip:Show()
 	end)
 	holder:SetScript("OnLeave", GameTooltip_Hide)
@@ -2612,18 +2988,39 @@ qbar.leave = CreateFrame("Button", nil, qbar, "UIPanelButtonTemplate")
 qbar.leave:SetSize(72, 22)
 qbar.leave:SetPoint("RIGHT", -10, 0)
 qbar.leave:SetText("Leave")
-qbar.leave:SetScript("OnClick", function() L.delist() end)
+qbar.leave:SetScript("OnClick", function() if OpenGroup_Nearby then OpenGroup_Nearby.gameUnlist() end L.delist() end)
 -- auto invite: turns it on and off (groups only); the label says whether it's running
 qbar.auto = CreateFrame("Button", nil, qbar, "UIPanelButtonTemplate")
 qbar.auto:SetSize(92, 22)
 qbar.auto:SetPoint("RIGHT", qbar.leave, "LEFT", -6, 0)
 qbar.auto:SetText("Auto Invite")
 qbar.auto:SetScript("OnClick", function() if OpenGroup_AutoInvite then OpenGroup_AutoInvite.toggle() end end)
+-- find players for the first open spot (groups only)
+qbar.find = CreateFrame("Button", nil, qbar, "UIPanelButtonTemplate")
+qbar.find:SetSize(92, 22)
+qbar.find:SetPoint("RIGHT", qbar.auto, "LEFT", -6, 0)
+-- one line in LookingForGroup chat, its own click (the game wants one for chat channels)
+qbar.lfg = CreateFrame("Button", nil, qbar, "UIPanelButtonTemplate")
+qbar.lfg:SetSize(92, 22)
+qbar.lfg:SetText("Post in LFG")
+qbar.lfg:SetScript("OnClick", function() if L.postLFGNow then L.postLFGNow() end end)
+qbar.lfg:SetScript("OnEnter", function(self)
+	GameTooltip:SetOwner(self, "ANCHOR_TOP")
+	GameTooltip:SetText("Post in LFG chat")
+	GameTooltip:AddLine("Posts one line about your listing in your LookingForGroup channel, so players without OpenGroup see it. Each click posts once.", 1, 1, 1, true)
+	GameTooltip:Show()
+end)
+qbar.lfg:SetScript("OnLeave", GameTooltip_Hide)
+qbar.find:SetText("Find players")
+qbar.find:SetScript("OnClick", function()
+	local spots = L.mine and type(L.mine.spots) == "table" and L.mine.spots or {}
+	if OpenGroup_UI and OpenGroup_UI.find then OpenGroup_UI.find.open(spots[1] or P.spot(0)) end
+end)
 qbar.roles = {}
 for i = 3, 1, -1 do
 	local t = qbar:CreateTexture(nil, "OVERLAY")
 	t:SetSize(26, 26)
-	if i == 3 then t:SetPoint("RIGHT", qbar.auto, "LEFT", -10, 0) else t:SetPoint("RIGHT", qbar.roles[i + 1], "LEFT", -2, 0) end
+	if i == 3 then t:SetPoint("RIGHT", qbar.lfg, "LEFT", -10, 0) else t:SetPoint("RIGHT", qbar.roles[i + 1], "LEFT", -2, 0) end
 	qbar.roles[i] = t
 end
 qbar.title:SetPoint("RIGHT", qbar.roles[1], "LEFT", -10, 0)
@@ -2668,6 +3065,10 @@ local function paintQueueBar()
 	if member then qbar.top:SetText(GREEN .. "Your group is listed|r" .. GREY .. "   by " .. member.leader .. "   " .. clock(time() - (member.at or time())) .. "|r") end
 	qbar.leave:SetShown(not member)
 	qbar.auto:SetShown(not summon and not bgq and not solo and not member)
+	qbar.find:SetShown(not summon and not bgq and not solo and not member)
+	qbar.lfg:ClearAllPoints()
+	qbar.lfg:SetPoint("RIGHT", qbar.find:IsShown() and qbar.find or qbar.auto:IsShown() and qbar.auto or qbar.leave, "LEFT", -6, 0)
+	qbar.lfg:SetShown(not member)
 	qbar.auto:SetText(AI and AI.on and (GREEN .. "Auto: On|r") or "Auto Invite")
 end
 
@@ -2685,7 +3086,7 @@ qbar:SetScript("OnClick", function() showPage((browse.matchCount or 0) > 0 and "
 qbar:SetScript("OnEnter", function(self)
 	GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
 	GameTooltip:SetText("You're listed")
-	GameTooltip:AddLine("OpenGroup players on every shard can see you. Your listing is re-sent every 90 seconds while you're online.", 1, 1, 1, true)
+	GameTooltip:AddLine("OpenGroup players on every server can see you. Your listing is re-sent every 90 seconds while you're online.", 1, 1, 1, true)
 	GameTooltip:AddLine((browse.matchCount or 0) > 0 and "Click to see who fits (top of Browse)." or "Click to change it.", 0, 1, 0)
 	GameTooltip:Show()
 end)
@@ -2716,12 +3117,12 @@ L.onNewListing = function(l)
 	for _, r in ipairs(ROLES) do if has(l.need, r) then roles[#roles + 1] = W.ROLE_NAME[r] end end
 	local who = W.classColor(l.class) .. L.short(l.leader) .. "|r"
 	if isBGQ(l.cat) then
-		L.print(("%s %s %s, shard %d."):format(who, l.cat == P.BGQ_OFFER and "can queue you for" or "wants a queue for", bgNames(l), l.shard))
+		L.print(("%s %s %s, " .. L.CHAN .. " %d."):format(who, l.cat == P.BGQ_OFFER and "can queue you for" or "wants a queue for", bgNames(l), l.shard))
 	elseif iAmLeader() then
-		L.print(("%s (%s, %d) wants %s, shard %d.%s"):format(who, #roles > 0 and table.concat(roles, "/") or "any role", l.level,
+		L.print(("%s (%s, %d) wants %s, " .. L.CHAN .. " %d.%s"):format(who, #roles > 0 and table.concat(roles, "/") or "any role", l.level,
 			L.titleOf(l), l.shard, l.note ~= "" and (" \"" .. l.note .. "\"") or ""))
 	else
-		L.print(("%s's group wants %s for %s, shard %d."):format(who, #roles > 0 and table.concat(roles, "/") or "players", L.titleOf(l), l.shard))
+		L.print(("%s's group wants %s for %s, " .. L.CHAN .. " %d."):format(who, #roles > 0 and table.concat(roles, "/") or "players", L.titleOf(l), l.shard))
 	end
 	W.sound("UI_GROUP_FINDER_RECEIVE_APPLICATION", 47615)
 	if OpenGroup_Minimap and OpenGroup_Minimap.flash then OpenGroup_Minimap.flash() end
@@ -2776,7 +3177,7 @@ local function announceToGroup()
 	local m = L.mine
 	local what = m.cat == P.SUMMON_CAT and ("summons to " .. (m.title or "?")) or chatTitle(m)
 	local need = m.cat ~= P.SUMMON_CAT and chatRoles(m.need) or nil
-	local text = ("[OpenGroup] Listed for %s%s. Anyone with OpenGroup on any shard can find us."):format(
+	local text = ("[OpenGroup] Listed for %s%s. Anyone with OpenGroup on any server can find us."):format(
 		what, need and (", need " .. need) or "")
 	local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
 	local ok = send and pcall(send, text, (IsInRaid and IsInRaid()) and "RAID" or "PARTY")
@@ -2800,11 +3201,13 @@ local function lfgLine(m)
 	end
 	return ("LFM %s%s, whisper me!%s"):format(chatTitle(m), roles and (", need " .. roles) or "", tag)
 end
+-- from the Post in LFG click only
 local function postToLFG()
-	if db().postLFG == false or not L.mine or not OpenGroup_Nearby then return end
+	if not L.mine or not OpenGroup_Nearby then return end
 	local ok, why = OpenGroup_Nearby.post(lfgLine(L.mine))
-	if not ok and why then L.print(why) end
+	if ok then L.print("posted in LookingForGroup.") elseif why then L.print(why) end
 end
+L.postLFGNow = postToLFG
 
 local lastTitle
 local function rememberListing(m)
@@ -2826,11 +3229,10 @@ L.onListed = function(first)
 	local summon = L.mine and L.mine.cat == P.SUMMON_CAT
 	local title = first and (summon and "Summons listed!" or "Group listed!") or "Listing updated"
 	local sub = peers == 0 and "Nobody to tell yet: find OpenGroup players in Network."
-		or ("Sent to %d %s on %d %s."):format(math.min(25, peers), peers == 1 and "player" or "players", L.count(shards), L.count(shards) == 1 and "shard" or "shards")
+		or ("Sent to %d %s on %d %s."):format(math.min(25, peers), peers == 1 and "player" or "players", L.count(shards), L.count(shards) == 1 and (L.CHAN .. " number") or (L.CHAN .. " numbers"))
 	local quest = L.mine and (L.mine.quest or 0) > 0
 	if first then
 		announceToGroup()
-		postToLFG()
 		OpenGroup_Alert.show({
 			head = "OpenGroup",
 			small = summon and "Summons listed" or bgq and (L.mine.cat == P.BGQ_OFFER and "Offering battleground queues" or "Asked for a battleground queue")
@@ -2870,7 +3272,7 @@ L.onDelisted = function()
 	if OpenGroup_Minimap then OpenGroup_Minimap.update() end
 	W.sound("IG_CHARACTER_INFO_CLOSE")
 	OpenGroup_Alert.show({
-		head = "OpenGroup", small = "Delisted on every shard", name = lastTitle or "You're off the list",
+		head = "OpenGroup", small = "Delisted on every server", name = lastTitle or "You're off the list",
 		icon = L.ICON, grey = true,
 		quiet = true, sound = "IG_CHARACTER_INFO_CLOSE", tint = { 0.42, 0.12, 0.1 }, hold = 2.5,
 	})
@@ -2893,8 +3295,16 @@ Q.onPick = function(q)
 	end
 	listForQuest(q)
 end
-qcard.list:SetScript("OnClick", function() if questFilter then listForQuest(questFilter) end end)
-qcard.close:SetScript("OnClick", function() questFilter = nil L.onChange() end)
+qcard.list:SetScript("OnClick", function() local q = questFilter or browse.questPrompt if q then browse.questPrompt = nil listForQuest(q) end end)
+qcard.close:SetScript("OnClick", function() questFilter = nil browse.questPrompt = nil L.onChange() end)
+qcard.show:SetScript("OnClick", function() local q = browse.questPrompt browse.questPrompt = nil if q then browse.setQuest(q) end end)
+-- a quest just accepted: offer it (the list stays as it is), if it's one people group for and the
+-- player hasn't turned the offer off
+Q.onAccept = function(q)
+	if db().questPrompt == false or not Q.worthGrouping(q.id) then return end
+	browse.questPrompt = q
+	L.onChange()
+end
 
 -- --------------------------------------------------------------------------------------------
 -- tabs, refresh, slash
@@ -3151,14 +3561,1086 @@ end)()
 
 -- --------------------------------------------------------------------------------------------
 
+browse.openTell = openWhisper
+
+-- --------------------------------------------------------------------------------------------
+-- FIND PLAYERS: a /who search built from an open spot (classes, levels, zone), the results in a
+-- list, and one-click whispers: each press opens the chat box with /w and your message, and you
+-- press Enter (one whisper per press, as the game allows). /who reaches every server, so this is
+-- the way to people the Group Finder and Trade never show you.
+
+local finder = page("find")
+;(function()
+	local F = finder
+	F.classes = {}          -- class tokens to search, taking turns one per Search click
+	F.turn = 0
+	F.results = {}
+	F.asked = {}            -- [name] = time we whispered them (this session)
+	F.pending = nil         -- the name whose whisper box we last opened
+	F.total = 0
+
+	-- header: class, levels, zone, name; the /who text it will run; Search
+	local classDD = W.dropdown(F.header, 150, "Any class", function(root)
+		root:CreateRadio("Any class", function() return #F.classes == 0 end, function() F.classes = {} F.paint() end)
+		local fac = UnitFactionGroup("player")
+		for _, cls in ipairs(L.roleClasses(0, fac)) do
+			root:CreateCheckbox(W.classColor(cls) .. W.className(cls) .. "|r", function() for _, c in ipairs(F.classes) do if c == cls then return true end end return false end,
+				function()
+					for i, c in ipairs(F.classes) do if c == cls then table.remove(F.classes, i) F.paint() return end end
+					F.classes[#F.classes + 1] = cls
+					F.paint()
+				end)
+		end
+	end)
+	classDD:SetPoint("TOPLEFT", 0, -4)
+	local function box(w, hint)
+		local e = CreateFrame("EditBox", nil, F.header, "InputBoxTemplate")
+		e:SetSize(w, 20)
+		e:SetAutoFocus(false)
+		e:SetScript("OnEscapePressed", e.ClearFocus)
+		e:SetScript("OnEnterPressed", e.ClearFocus)
+		e.ph = e:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+		e.ph:SetPoint("LEFT", 2, 0)
+		e.ph:SetText(hint)
+		e:HookScript("OnTextChanged", function(self) self.ph:SetShown(self:GetText() == "") F.paint() end)
+		return e
+	end
+	local lvlLabel = F.header:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+	lvlLabel:SetPoint("LEFT", classDD, "RIGHT", 12, 0)
+	lvlLabel:SetText("Level")
+	F.min = box(30, "")
+	F.min:SetPoint("LEFT", lvlLabel, "RIGHT", 8, 0)
+	F.min:SetNumeric(true) F.min:SetMaxLetters(2)
+	local dash = F.header:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+	dash:SetPoint("LEFT", F.min, "RIGHT", 4, 0)
+	dash:SetText("-")
+	F.max = box(30, "")
+	F.max:SetPoint("LEFT", dash, "RIGHT", 8, 0)
+	F.max:SetNumeric(true) F.max:SetMaxLetters(2)
+	F.zone = box(130, "any zone")
+	F.zone:SetPoint("TOPLEFT", classDD, "BOTTOMLEFT", 6, -8)
+	local here = CreateFrame("Button", nil, F.header, "UIPanelButtonTemplate")
+	here:SetSize(70, 20)
+	here:SetPoint("LEFT", F.zone, "RIGHT", 6, 0)
+	here:SetText("My zone")
+	here:SetScript("OnClick", function() F.zone:SetText(GetZoneText and GetZoneText() or "") end)
+	F.name = box(110, "name (optional)")
+	F.name:SetPoint("LEFT", here, "RIGHT", 10, 0)
+	local search = CreateFrame("Button", nil, F.header, "UIPanelButtonTemplate")
+	search:SetSize(130, 24)
+	search:SetPoint("TOPRIGHT", -4, -4)
+	local clearBtn = CreateFrame("Button", nil, F.header, "UIPanelButtonTemplate")
+	clearBtn:SetSize(60, 24)
+	clearBtn:SetPoint("TOPRIGHT", search, "BOTTOMRIGHT", 0, -4)
+	clearBtn:SetText("Clear")
+	clearBtn:SetScript("OnClick", function() if F.clear then F.clear() end end)
+	search:SetText("Search")
+	F.preview = F.header:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+	F.preview:SetPoint("TOPLEFT", F.zone, "BOTTOMLEFT", -6, -8)
+	F.preview:SetPoint("RIGHT", F.header, "RIGHT", -8, 0)
+	F.preview:SetJustifyH("LEFT")
+	F.preview:SetWordWrap(false)
+
+	-- the query for the next Search click: one class at a time when several are ticked
+	function F.query()
+		local cls = #F.classes > 0 and F.classes[(F.turn % #F.classes) + 1] or nil
+		return L.whoQuery({ class = cls and W.className(cls) or nil, min = F.min:GetText(), max = F.max:GetText(), zone = F.zone:GetText(), name = F.name:GetText() })
+	end
+
+	-- results
+	local cols = F.content:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+	cols:SetPoint("TOPLEFT", 16, -8)
+	cols:SetText("Name                                   Lvl    Class              Zone                       Guild")
+	cols:Hide()
+	F.notice = F.content:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+	F.notice:SetPoint("TOPLEFT", 14, -8)
+	F.notice:SetPoint("RIGHT", F.content, "RIGHT", -200, 0)
+	F.notice:SetJustifyH("LEFT")
+	local narrowZone = CreateFrame("Button", nil, F.content, "UIPanelButtonTemplate")
+	narrowZone:SetSize(90, 20)
+	narrowZone:SetPoint("TOPRIGHT", -112, -4)
+	narrowZone:SetText("My zone")
+	narrowZone:SetScript("OnClick", function() F.zone:SetText(GetZoneText and GetZoneText() or "") end)
+	local narrowLvl = CreateFrame("Button", nil, F.content, "UIPanelButtonTemplate")
+	narrowLvl:SetSize(96, 20)
+	narrowLvl:SetPoint("TOPRIGHT", -12, -4)
+	narrowLvl:SetText("Split levels")
+	narrowLvl:SetScript("OnClick", function()
+		local lo, hi = P.int(F.min:GetText(), 1, 200), P.int(F.max:GetText(), 1, 200)
+		if lo and hi and hi > lo then F.max:SetText(tostring(math.floor((lo + hi) / 2))) end
+	end)
+	local list = CreateFrame("Frame", nil, F.content, "WowScrollBoxList")
+	list:SetPoint("TOPLEFT", 6, -30)
+	list:SetPoint("BOTTOMRIGHT", -24, 6)
+	local bar = CreateFrame("EventFrame", nil, F.content, "MinimalScrollBar")
+	bar:SetPoint("TOPLEFT", list, "TOPRIGHT", 6, 0)
+	bar:SetPoint("BOTTOMLEFT", list, "BOTTOMRIGHT", 6, 0)
+	F.empty = F.content:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+	F.empty:SetPoint("CENTER", 0, 20)
+	F.empty:SetWidth(360)
+	F.empty:SetSpacing(4)
+	F.empty:SetText("Pick a class and levels, then click Search. /who looks across every server, so this finds people the Group Finder and chat channels don't show you.")
+
+	-- footer: the message and Whisper next
+	F.msg = CreateFrame("EditBox", nil, F.footer, "InputBoxTemplate")
+	F.msg:SetPoint("LEFT", 8, 0)
+	F.msg:SetPoint("RIGHT", F.footer, "RIGHT", -150, 0)
+	F.msg:SetHeight(22)
+	F.msg:SetAutoFocus(false)
+	F.msg:SetMaxLetters(200)
+	F.msg:SetScript("OnEscapePressed", F.msg.ClearFocus)
+	F.msg:SetScript("OnEnterPressed", F.msg.ClearFocus)
+	F.msg:HookScript("OnTextChanged", function(self, user) if user then db().findMsg = self:GetText() end end)
+	local nextBtn = CreateFrame("Button", nil, F.footer, "UIPanelButtonTemplate")
+	nextBtn:SetSize(130, 24)
+	nextBtn:SetPoint("RIGHT", 0, 0)
+	nextBtn:SetText("Whisper next")
+
+	-- who's worth whispering: not you, not ignored, not asked yet, not an OpenGroup player
+	-- (they already get your listing)
+	function F.skip(info)
+		local name = L.short(info.fullName)
+		return L.isMe(name) or L.ignored(name) or F.asked[name] ~= nil or (L.peers[name] ~= nil)
+	end
+	function F.nextTarget()
+		for _, info in ipairs(F.results) do if not F.skip(info) then return info end end
+		return nil
+	end
+	-- open the chat box on them with the message; the player presses Enter
+	function F.whisper(info)
+		local name = L.short(info.fullName)
+		F.pending = name
+		if browse.openTell then browse.openTell(name, F.msg:GetText()) end
+		F.paint()
+	end
+	L.onWhisperSent = function(name)
+		if F.pending and L.short(name) == F.pending then F.pending = nil end
+		for _, info in ipairs(F.results) do
+			if L.short(info.fullName) == L.short(name) then F.asked[L.short(name)] = time() end
+		end
+		if F.content:IsShown() then F.paint() end
+	end
+
+	local view = CreateScrollBoxListLinearView()
+	view:SetElementExtent(22)
+	view:SetElementInitializer("Button", function(row, info)
+		if not row.built then
+			row.hl = row:CreateTexture(nil, "HIGHLIGHT")
+			row.hl:SetAllPoints()
+			row.hl:SetColorTexture(1, 0.9, 0.6, 0.08)
+			local function fs(x, w, font)
+				local f = row:CreateFontString(nil, "ARTWORK", font or "GameFontHighlightSmall")
+				f:SetPoint("LEFT", x, 0)
+				f:SetWidth(w)
+				f:SetJustifyH("LEFT")
+				f:SetWordWrap(false)
+				return f
+			end
+			row.name = fs(8, 150, "GameFontNormal")
+			row.lvl = fs(162, 26)
+			row.class = fs(192, 66)
+			row.zone = fs(262, 110)
+			row.guild = fs(376, 90)
+			row.badge = row:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+			row.badge:SetPoint("RIGHT", -72, 0)
+			row.btn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+			row.btn:SetSize(64, 18)
+			row.btn:SetPoint("RIGHT", -4, 0)
+			row.btn:SetText("Whisper")
+			row.btn:SetScript("OnClick", function(self) F.whisper(self:GetParent().info) end)
+			row:RegisterForClicks("RightButtonUp")
+			row:SetScript("OnClick", function(self) if browse.personMenu then browse.personMenu(self, L.short(self.info.fullName), nil) end end)
+			row.built = true
+		end
+		row.info = info
+		local name = L.short(info.fullName)
+		row.name:SetText(W.classColor(info.filename) .. name .. "|r")
+		row.lvl:SetText(tostring(info.level or ""))
+		row.class:SetText(info.classStr or "")
+		row.zone:SetText(info.area or "")
+		row.guild:SetText(info.fullGuildName and info.fullGuildName ~= "" and ("<" .. info.fullGuildName .. ">") or "")
+		local badge = ""
+		if L.peers[name] then badge = GREEN .. "OpenGroup|r"
+		elseif F.asked[name] then badge = GREY .. "asked " .. date("%H:%M", F.asked[name]) .. "|r"
+		elseif F.pending == name then badge = GOLD .. "press Enter|r" end
+		row.badge:SetText(badge)
+		row:SetAlpha(F.skip(info) and 0.55 or 1)
+	end)
+	ScrollUtil.InitScrollBoxListWithScrollBar(list, bar, view)
+
+	function F.paint()
+		classDD:SetLabel(#F.classes == 0 and "Any class" or #F.classes == 1 and W.className(F.classes[1]) or (#F.classes .. " classes"))
+		-- the button names the class this click will look for
+		if #F.classes > 1 then
+			search:SetText(("%s (%d of %d)"):format(W.className(F.nextClass()), (F.turn % #F.classes) + 1, #F.classes))
+		else
+			search:SetText("Search")
+		end
+		local q = F.query()
+		F.preview:SetText("/who " .. (q ~= "" and q or "(everyone)") .. (#F.classes > 1 and (GREY .. "   (one class per Search)|r") or ""))
+		local shown = {}
+		for _, info in ipairs(F.results) do if not L.ignored(L.short(info.fullName)) then shown[#shown + 1] = info end end
+		list:SetDataProvider(CreateDataProvider(shown), ScrollBoxConstants.RetainScrollPosition)
+		local full = F.total >= 50
+		-- per class searched so far: "Warrior 50+ (narrow it), Druid 12"
+		local parts = {}
+		for _, c in ipairs(F.covered) do
+			parts[#parts + 1] = (c.class and W.className(c.class) or "Everyone") .. " " .. (c.n >= 50 and (GOLD .. "50+ (narrow it)|r") or tostring(c.n))
+		end
+		F.notice:SetText(F.searching and (GREY .. "Searching...|r")
+			or (#parts > 1 and (GREY .. #shown .. " players:|r " .. table.concat(parts, ", ")))
+			or full and (GOLD .. "50 shown (the most /who gives). Narrow the search:|r")
+			or (#shown > 0 and (GREY .. #shown .. " found|r") or ""))
+		narrowZone:SetShown(full and not F.searching) narrowLvl:SetShown(full and not F.searching)
+		F.empty:SetShown(#shown == 0 and not F.searching)
+		local nxt = F.nextTarget()
+		nextBtn:SetEnabled(nxt ~= nil)
+		nextBtn:SetText(nxt and "Whisper next" or "Nobody left")
+	end
+
+	-- A /who looks for one class, and the game allows one per click: with several classes ticked,
+	-- each Search click takes the next one and its players join the list (no repeats). Changing
+	-- the levels, zone or name starts a new list; so does Clear.
+	F.covered = {}           -- { { class, n (how many matched), shown } } in search order
+	function F.base()
+		local cls = {}
+		for _, c in ipairs(F.classes) do cls[#cls + 1] = c end
+		table.sort(cls)
+		return table.concat({ F.min:GetText(), F.max:GetText(), F.zone:GetText(), F.name:GetText(), table.concat(cls, ",") }, "|")
+	end
+	function F.clear() F.results, F.total, F.covered, F.lastBase = {}, 0, {}, nil F.paint() end
+	function F.nextClass() return #F.classes > 0 and F.classes[(F.turn % #F.classes) + 1] or nil end
+	function F.merge(list2, n, cls)
+		local seen = {}
+		for _, info in ipairs(F.results) do seen[info.fullName] = true end
+		for _, info in ipairs(list2 or {}) do
+			if not seen[info.fullName] then seen[info.fullName] = true F.results[#F.results + 1] = info end
+		end
+		F.covered[#F.covered + 1] = { class = cls, n = n or 0, shown = #(list2 or {}) }
+		F.total = n or 0
+	end
+	function F.searchClick()
+		if InCombatLockdown and InCombatLockdown() then UIErrorsFrame:AddMessage("Not in combat.", 1, .1, .1) return end
+		local base = F.base()
+		if base ~= F.lastBase then F.results, F.covered, F.lastBase = {}, {}, base end
+		local q = F.query()
+		local cls = F.nextClass()
+		F.searching = true
+		-- one click-only call: this click's /who (no Group Finder search alongside)
+		local ok = L.scan.find(q, function(list2, n)
+			F.searching = false
+			F.merge(list2, n, cls)
+			-- quietly ask who runs OpenGroup (within the usual hello limits)
+			for _, info in ipairs(list2 or {}) do L.probe(L.short(info.fullName), "find") end
+			F.paint()
+		end)
+		if not ok then F.searching = false UIErrorsFrame:AddMessage("A search is already running.", 1, .82, 0) end
+		if #F.classes > 1 then F.turn = F.turn + 1 end
+		F.paint()
+	end
+	search:SetScript("OnClick", F.searchClick)
+	nextBtn:SetScript("OnClick", function() local info = F.nextTarget() if info then F.whisper(info) end end)
+
+	-- open on a spot: its classes (or the classes that can fill its role), its levels (or the
+	-- activity's range, else yours give or take 3), and a message from your listing
+	function F.open(spot)
+		local lvl = UnitLevel("player") or 1
+		local fac = UnitFactionGroup("player")
+		if spot then
+			F.classes = spot.class and { spot.class } or ((spot.role or 0) ~= 0 and L.roleClasses(spot.role, fac) or {})
+		end
+		local lo, hi = spot and spot.min, spot and spot.max
+		if not (lo or hi) then
+			local acts = (L.mine and L.mine.acts) or (type(db().draft) == "table" and db().draft.acts) or {}
+			local i = acts[1] and A.get(acts[1])
+			if i and (i.min or 0) > 0 then lo, hi = i.min, i.max end
+		end
+		lo, hi = lo or math.max(1, lvl - 3), hi or math.min(60, lvl + 3)
+		F.min:SetText(tostring(lo)) F.max:SetText(tostring(hi))
+		local what = L.mine and L.titleOf(L.mine) or nil
+		local who = spot and (spot.class and W.className(spot.class) or ((spot.role or 0) ~= 0 and W.ROLE_NAME[spot.role]:lower())) or nil
+		local msg = db().findMsg
+		if not msg or msg == "" or spot then
+			msg = ("Hi, we're looking for a %s%s. Want to join?"):format(who or "player", what and (" for " .. what) or "")
+		end
+		F.msg:SetText(msg)
+		if not win:IsShown() then win:Show() end
+		showPage("find")
+		F.paint()
+	end
+	F.onShow = function()
+		if F.msg:GetText() == "" then F.msg:SetText(db().findMsg or "Hi, want to join our group?") end
+		if F.min:GetText() == "" then
+			local lvl = UnitLevel("player") or 1
+			F.min:SetText(tostring(math.max(1, lvl - 3))) F.max:SetText(tostring(math.min(60, lvl + 3)))
+		end
+		F.paint()
+	end
+end)()
+
+-- --------------------------------------------------------------------------------------------
+-- WORLD CHAT: the useful LookingForGroup and Trade lines from every chat number OpenGroup users
+-- are on, newest first (Nearby.lua's World chat section collects and relays them).
+
+local chatPage = page("chat")
+;(function()
+	local C = chatPage
+	local Nb = OpenGroup_Nearby
+	-- a short header: the search row and the status line, then the list
+	C.headerH = 52
+	C.search = ""
+	local function flag(key, default) local v = db()[key] if v == nil then return default end return v end
+
+	local box = CreateFrame("EditBox", nil, C.header, "SearchBoxTemplate")
+	box:SetSize(220, 22)
+	box:SetPoint("TOPLEFT", 8, -8)
+	box:SetAutoFocus(false)
+	if box.Instructions then box.Instructions:SetText("Search, e.g. arcanite or BRD") end
+	box:HookScript("OnTextChanged", function(self)
+		local t = (self:GetText() or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+		if t ~= C.search then C.search = t C.refresh() end
+	end)
+	local function check(label, key, x, tip)
+		local cb = CreateFrame("CheckButton", nil, C.header, "UICheckButtonTemplate")
+		cb:SetSize(22, 22)
+		cb:SetPoint("LEFT", box, "RIGHT", x, 0)
+		local l = C.header:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+		l:SetPoint("LEFT", cb, "RIGHT", 2, 1)
+		l:SetText(label)
+		cb:SetScript("OnShow", function(self) self:SetChecked(flag(key, true)) end)
+		cb:SetScript("OnClick", function(self) db()[key] = self:GetChecked() and true or false C.refresh() end)
+		if tip then
+			cb:SetScript("OnEnter", function(self) GameTooltip:SetOwner(self, "ANCHOR_BOTTOM") GameTooltip:SetText(label) GameTooltip:AddLine(tip, 1, 1, 1, true) GameTooltip:Show() end)
+			cb:SetScript("OnLeave", GameTooltip_Hide)
+		end
+		return cb
+	end
+	check("LFG", "chatShowLFG", 14)
+	check("Trade", "chatShowTrade", 64)
+	check("Mine", "chatShowMine", 124, "Lines from your own chat number, which you also see in your chat window.")
+	C.status = C.header:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+	C.status:SetPoint("TOPLEFT", box, "BOTTOMLEFT", -4, -6)
+	C.status:SetPoint("RIGHT", C.header, "RIGHT", -8, 0)
+	C.status:SetJustifyH("LEFT")
+
+	local list = CreateFrame("Frame", nil, C.content, "WowScrollBoxList")
+	list:SetPoint("TOPLEFT", 6, -6)
+	list:SetPoint("BOTTOMRIGHT", -24, 6)
+	local bar = CreateFrame("EventFrame", nil, C.content, "MinimalScrollBar")
+	bar:SetPoint("TOPLEFT", list, "TOPRIGHT", 6, 0)
+	bar:SetPoint("BOTTOMLEFT", list, "BOTTOMRIGHT", 6, 0)
+	C.empty = C.content:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+	C.empty:SetPoint("CENTER", 0, 20)
+	C.empty:SetWidth(380)
+	C.empty:SetSpacing(4)
+
+	local function label(e)
+		if e.mine then return GREY .. "Here|r" end
+		return (e.kind == "t" and "|cffffc0a0Trade " or "|cffa0d0ffLFG ") .. e.chan .. "|r"
+	end
+	local view = CreateScrollBoxListLinearView()
+	view:SetElementExtent(20)
+	view:SetElementInitializer("Button", function(row, e)
+		if not row.built then
+			row.hl = row:CreateTexture(nil, "HIGHLIGHT")
+			row.hl:SetAllPoints()
+			row.hl:SetColorTexture(1, 0.9, 0.6, 0.08)
+			local function fs(x, w, font)
+				local f = row:CreateFontString(nil, "ARTWORK", font or "GameFontHighlightSmall")
+				f:SetPoint("LEFT", x, 0)
+				if w then f:SetWidth(w) end
+				f:SetJustifyH("LEFT")
+				f:SetWordWrap(false)
+				return f
+			end
+			row.age = fs(6, 32, "GameFontDisableSmall")
+			row.where = fs(40, 62)
+			row.name = fs(104, 110, "GameFontNormalSmall")
+			row.text = fs(218, nil)
+			row.text:SetPoint("RIGHT", -6, 0)
+			-- a group post: a gold bar at the left and a small group icon before the line
+			row.gbar = row:CreateTexture(nil, "ARTWORK")
+			row.gbar:SetPoint("TOPLEFT", 0, -2) row.gbar:SetPoint("BOTTOMLEFT", 0, 2)
+			row.gbar:SetWidth(3)
+			row.gbar:SetColorTexture(1, 0.78, 0.2, 0.9)
+			row.gicon = row:CreateTexture(nil, "ARTWORK")
+			row.gicon:SetSize(14, 14)
+			row.gicon:SetPoint("RIGHT", row.text, "LEFT", -2, 0)
+			row.gicon:SetTexture("Interface\\Icons\\INV_Misc_GroupLooking")
+			row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+			row:SetScript("OnClick", function(self, button)
+				local x = self.e
+				if not x then return end
+				if button == "RightButton" then if browse.personMenu then browse.personMenu(self, x.leader, nil) end return end
+				-- a group post: to that group in Browse; anything else: whisper them
+				if x.group and browse.focus and browse.focus(x.leader) then return end
+				if browse.openTell then browse.openTell(x.leader, "") end
+			end)
+			row:SetScript("OnEnter", function(self)
+				local x = self.e
+				if not x then return end
+				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+				local item = Nb.firstItem(x.text)
+				local link = item and GetItemInfo and select(2, GetItemInfo(item))
+				if link then GameTooltip:SetHyperlink(link) GameTooltip:AddLine(" ") end
+				GameTooltip:AddLine(x.leader, 1, .82, 0)
+				GameTooltip:AddLine(Nb.unpackLinks(x.text), 1, 1, 1, true)
+				GameTooltip:AddLine((x.mine and "Your chat number" or ((x.kind == "t" and "Trade" or "LookingForGroup") .. ", " .. L.CHAN .. " " .. x.chan))
+					.. (x.relay and (", relayed by " .. x.relay) or ""), .6, .6, .6, true)
+				GameTooltip:AddLine(x.group and "Click to see this group in Browse. Right-click for more." or "Click to whisper. Right-click for more.", 0, 1, 0)
+				GameTooltip:Show()
+			end)
+			row:SetScript("OnLeave", GameTooltip_Hide)
+			row.built = true
+		end
+		row.e = e
+		local secs = math.max(0, time() - e.got)
+		row.age:SetText(secs < 60 and "now" or secs < 3600 and (math.floor(secs / 60) .. "m") or (math.floor(secs / 3600) .. "h"))
+		row.where:SetText(label(e))
+		row.name:SetText(W.classColor(e.class) .. e.leader .. "|r")
+		row.text:SetText(Nb.unpackLinks(e.text))
+		row.text:SetTextColor(Nb.channelColour(e.kind))
+		row.gbar:SetShown(e.group == true)
+		row.gicon:SetShown(e.group == true)
+	end)
+	ScrollUtil.InitScrollBoxListWithScrollBar(list, bar, view)
+
+	function C.rows()
+		local out = {}
+		local q = C.search or ""
+		for _, e in ipairs(Nb.feed or {}) do
+			local ok = (e.kind == "t" and flag("chatShowTrade", true)) or (e.kind == "l" and flag("chatShowLFG", true))
+			if ok and e.mine and not flag("chatShowMine", true) then ok = false end
+			if ok and L.ignored(e.leader) then ok = false end
+			if ok and q ~= "" and not Nb.searchText(e):find(q, 1, true) then ok = false end
+			if ok then out[#out + 1] = e end
+		end
+		table.sort(out, function(a, b) return a.got > b.got end)
+		return out
+	end
+	function C.refresh()
+		if not C.content:IsShown() then return end
+		local rows = C.rows()
+		list:SetDataProvider(CreateDataProvider(rows), ScrollBoxConstants.RetainScrollPosition)
+		local nums = {}
+		for _, e in ipairs(Nb.feed or {}) do if not e.mine then nums[e.chan] = true end end
+		local keys = {}
+		for k in pairs(nums) do keys[#keys + 1] = k end
+		table.sort(keys)
+		C.status:SetText((#keys > 0 and ("From " .. L.CHAN .. " " .. table.concat(keys, ", ") .. " and yours.  ") or "Only your own chat number so far.  ")
+			.. #rows .. " lines, last 3 hours.")
+		C.empty:SetShown(#rows == 0)
+		C.empty:SetText((Nb.feed and #Nb.feed > 0) and "Nothing matches." or
+			"Trade ads, crafters and group posts from every chat number with an OpenGroup user show up here, kept for 3 hours. Lines from other numbers arrive about every 20 seconds.")
+	end
+	C.onShow = function()
+		if Nb.bindHistory then Nb.bindHistory() end
+		-- just logged in: ask someone for the last hour
+		if Nb.askBacklog then pcall(Nb.askBacklog) end
+		C.refresh()
+	end
+
+	-- (sharing your chat number's Trade lines is switched in Settings)
+end)()
+
+-- --------------------------------------------------------------------------------------------
+-- Report a problem: addons can't open a browser or send anything, so this shows a link to copy.
+-- It opens OpenGroup's issue form on GitHub with the version and the game details filled in
+-- (client, language, chat number, how many OpenGroup players you know, the settings, the last
+-- error). No character or player names go in it.
+
+;(function()
+	local REPO = "https://github.com/openmap-world/opengroup/issues/new"
+	local function enc(s)
+		return (tostring(s or ""):gsub("\n", "\r\n"):gsub("([^%w%-%.%_%~ ])", function(c) return ("%%%02X"):format(c:byte()) end):gsub(" ", "+"))
+	end
+	local function onOff(v) return v and "on" or "off" end
+	-- the game details, plain text, no names
+	function L.reportDetails()
+		local Nb = OpenGroup_Nearby
+		local version, build, _, toc = "?", "?", nil, "?"
+		if GetBuildInfo then version, build, _, toc = GetBuildInfo() end
+		local live, n = L.live(), 0
+		for _ in pairs(live) do n = n + 1 end
+		local err = L.lastError and tostring(L.lastError):gsub("[\r\n]+", " "):sub(1, 200) or "none"
+		local lines = {
+			("OpenGroup %s"):format(L.VERSION),
+			("Client %s, build %s, interface %s, language %s"):format(tostring(version), tostring(build), tostring(toc), GetLocale and GetLocale() or "?"),
+			("%s %s"):format(L.CHAN, L.shard() > 0 and tostring(L.shard()) or "unknown"),
+			("OpenGroup players known %d, heard from lately %d"):format(L.count(L.peers), n),
+			("Messages sent %d, received %d, refused %d, bad %d"):format(L.stats.sent or 0, L.stats.got or 0, L.stats.refused or 0, L.stats.bad or 0),
+			("Settings: share LFG chat %s, share Trade chat %s, list in the game's Group Finder %s, tell my party %s, hello to players around me %s, all languages %s"):format(
+				onOff(Nb and Nb.shareChat()), onOff(Nb and Nb.shareTrade()), onOff(db().gameList ~= false), onOff(db().tellParty ~= false),
+				onOff(db().nearHello ~= false), onOff(Nb and Nb.allLanguages())),
+			("World chat lines %d, in Trade %s"):format(Nb and Nb.feed and #Nb.feed or 0, onOff(Nb and Nb.inTrade and Nb.inTrade())),
+			("Last error: %s"):format(err),
+		}
+		return table.concat(lines, "\n")
+	end
+	function L.reportURL(kind)
+		if kind == "idea" then
+			return REPO .. "?template=feature.yml&version=" .. enc(L.VERSION)
+		end
+		return REPO .. "?template=from-game.yml&title=" .. enc("Problem in " .. L.VERSION .. ": ")
+			.. "&version=" .. enc(L.VERSION) .. "&status=" .. enc(L.reportDetails())
+	end
+
+	local frame
+	function L.showReport()
+		if not frame then
+			frame = CreateFrame("Frame", "OpenGroupReport", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
+			frame:SetSize(560, 190)
+			frame:SetPoint("CENTER")
+			frame:SetFrameStrata("DIALOG")
+			frame:EnableMouse(true)
+			frame:SetMovable(true)
+			frame:SetClampedToScreen(true)
+			frame:RegisterForDrag("LeftButton")
+			frame:SetScript("OnDragStart", frame.StartMoving)
+			frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+			if frame.SetBackdrop then
+				frame:SetBackdrop({ bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark", edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+					tile = true, tileSize = 32, edgeSize = 24, insets = { left = 6, right = 6, top = 6, bottom = 6 } })
+			end
+			tinsert(UISpecialFrames, "OpenGroupReport")
+			local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+			title:SetPoint("TOP", 0, -16)
+			title:SetText("Report a problem")
+			local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
+			close:SetPoint("TOPRIGHT", -4, -4)
+			local function field(label, y)
+				local fs = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+				fs:SetPoint("TOPLEFT", 20, y)
+				fs:SetText(label)
+				local box = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+				box:SetSize(510, 22)
+				box:SetPoint("TOPLEFT", 26, y - 18)
+				box:SetAutoFocus(false)
+				box:SetScript("OnEditFocusGained", function(self) self:HighlightText() end)
+				box:SetScript("OnEscapePressed", function() frame:Hide() end)
+				-- read only: typing puts the link back
+				box:SetScript("OnTextChanged", function(self, user) if user then self:SetText(self.value or "") self:HighlightText() end end)
+				return box
+			end
+			frame.bug = field("A problem: copy this link (Ctrl+C), then paste it in your browser", -48)
+			frame.idea = field("An idea:", -102)
+			local tip = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+			tip:SetPoint("BOTTOMLEFT", 20, 18)
+			tip:SetWidth(520)
+			tip:SetJustifyH("LEFT")
+			tip:SetText("The problem link fills in your version and game details (no character names). You need a GitHub account to post.")
+		end
+		frame.bug.value, frame.idea.value = L.reportURL("bug"), L.reportURL("idea")
+		frame.bug:SetText(frame.bug.value)
+		frame.idea:SetText(frame.idea.value)
+		frame:Show()
+		frame.bug:SetFocus()
+		frame.bug:HighlightText()
+	end
+
+	-- on the Settings bar, at the right
+	local btn = CreateFrame("Button", nil, net.content, "UIPanelButtonTemplate")
+	btn:SetSize(140, 20)
+	btn:SetPoint("RIGHT", net.settingsBar, "RIGHT", -8, 0)
+	btn:SetFrameLevel(net.settingsBar:GetFrameLevel() + 2)
+	btn:SetText("Report a problem")
+	btn:SetScript("OnClick", function() L.showReport() end)
+end)()
+
+-- --------------------------------------------------------------------------------------------
+-- Browse as cards: two per line, the same sections, sorting and filters as the rows. A card has the
+-- activity, its levels, where and how long ago on top; the leader; the five slots big, each with
+-- a word under it ("Tank", "need heal", "open"); the note; and Ask to join (Invite for a solo
+-- player) and Whisper. The list/cards button next to Filter switches; Settings has it too.
+
+;(function()
+	local CARD_H, GAP = 150, 8
+	local ROLE_WORD = { [1] = "Tank", [2] = "Heal", [4] = "DPS" }
+	function browse.cardsOn() return type(db()) == "table" and db().browseView == "cards" end
+	function browse.setCards(on)
+		db().browseView = on and "cards" or nil
+		if browse.viewBtn then browse.viewBtn:Paint() end
+		L.onChange()
+	end
+
+	-- the switch, next to Filter (the search box gives it room)
+	local vb = CreateFrame("Button", nil, browse.header, "UIPanelButtonTemplate")
+	vb:SetSize(60, 22)
+	vb:SetPoint("RIGHT", browse.filterBtn, "LEFT", -8, 0)
+	function vb:Paint() self:SetText(browse.cardsOn() and "Rows" or "Cards") end
+	vb:SetScript("OnShow", vb.Paint)
+	vb:SetScript("OnClick", function() browse.setCards(not browse.cardsOn()) end)
+	vb:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:SetText(browse.cardsOn() and "Show rows" or "Show cards")
+		GameTooltip:AddLine("Cards: two groups per line, with each slot spelled out and the buttons on the card.", 1, 1, 1, true)
+		GameTooltip:Show()
+	end)
+	vb:SetScript("OnLeave", GameTooltip_Hide)
+	vb:Paint()
+	browse.viewBtn = vb
+	-- Show: all / groups / players looking for a group (also in the Filter menu)
+	local sb = CreateFrame("Button", nil, browse.header, "UIPanelButtonTemplate")
+	sb:SetSize(70, 22)
+	sb:SetPoint("RIGHT", vb, "LEFT", -6, 0)
+	local SHOW_NEXT = { [""] = "groups", groups = "players", players = "" }
+	function sb:Paint()
+		local k = type(db()) == "table" and db().showKind or nil
+		self:SetText(k == "groups" and "Groups" or k == "players" and "Players" or "All")
+	end
+	sb:SetScript("OnShow", sb.Paint)
+	sb:SetScript("OnClick", function()
+		local nxt = SHOW_NEXT[db().showKind or ""]
+		browse.setShow(nxt ~= "" and nxt or nil)
+	end)
+	sb:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:SetText("Show: all, groups only, or players looking for a group")
+		GameTooltip:AddLine("Click to switch. Also in the Filter menu.", 1, 1, 1, true)
+		GameTooltip:Show()
+	end)
+	sb:SetScript("OnLeave", GameTooltip_Hide)
+	sb:Paint()
+	browse.showBtn = sb
+	if browse.searchBox then
+		browse.searchBox:ClearAllPoints()
+		browse.searchBox:SetPoint("LEFT", browse.header, "TOPLEFT", 8, -19)
+		browse.searchBox:SetPoint("RIGHT", sb, "LEFT", -10, 0)
+	end
+
+	local list = CreateFrame("Frame", nil, browse.content, "WowScrollBoxList")
+	list:SetPoint("TOPLEFT", box, "TOPLEFT")
+	list:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT")
+	local cbar = CreateFrame("EventFrame", nil, browse.content, "MinimalScrollBar")
+	cbar:SetPoint("TOPLEFT", list, "TOPRIGHT", 6, 0)
+	cbar:SetPoint("BOTTOMLEFT", list, "BOTTOMRIGHT", 6, 0)
+	list:Hide() cbar:Hide()
+
+	local function card(parent)
+		local c = CreateFrame("Button", nil, parent)
+		c.bg = c:CreateTexture(nil, "BACKGROUND")
+		c.bg:SetAllPoints()
+		c.bg:SetColorTexture(0.13, 0.1, 0.06, 0.92)
+		W.edge(c, 0.36, 0.29, 0.2, 1)
+		c.hl = c:CreateTexture(nil, "HIGHLIGHT")
+		c.hl:SetAllPoints()
+		c.hl:SetColorTexture(1, 0.9, 0.6, 0.06)
+		local function fs(font) local f = c:CreateFontString(nil, "ARTWORK", font) f:SetJustifyH("LEFT") f:SetWordWrap(false) return f end
+		c.act = fs("GameFontNormal")
+		c.act:SetPoint("TOPLEFT", 10, -9)
+		c.meta = fs("GameFontDisableSmall")
+		c.meta:SetJustifyH("RIGHT")
+		c.meta:SetPoint("TOPRIGHT", -10, -10)
+		c.act:SetPoint("RIGHT", c.meta, "LEFT", -6, 0)
+		c.cls = c:CreateTexture(nil, "ARTWORK")
+		c.cls:SetSize(14, 14)
+		c.cls:SetPoint("TOPLEFT", 10, -30)
+		c.who = fs("GameFontHighlightSmall")
+		c.who:SetPoint("LEFT", c.cls, "RIGHT", 5, 0)
+		c.who:SetPoint("RIGHT", c, "RIGHT", -10, 0)
+		c.slots, c.words, c.badges, c.plus = {}, {}, {}, {}
+		for i = 1, 5 do
+			local t = c:CreateTexture(nil, "ARTWORK")
+			t:SetSize(26, 26)
+			t:SetPoint("TOPLEFT", 12 + (i - 1) * 46, -52)
+			local b = c:CreateTexture(nil, "OVERLAY")
+			b:SetSize(12, 12)
+			b:SetPoint("CENTER", t, "BOTTOMRIGHT", -1, 1)
+			local p = c:CreateFontString(nil, "OVERLAY", "GameFontGreen")
+			p:SetPoint("CENTER", t, "BOTTOMRIGHT", -1, 2)
+			p:SetText("+")
+			local gl = c:CreateTexture(nil, "BORDER")
+			gl:SetTexture(DISC)
+			gl:SetPoint("CENTER", t, "CENTER", 0, 0)
+			gl:SetSize(34, 34)
+			gl:Hide()
+			c.glows = c.glows or {}
+			c.glows[i] = gl
+			local w = c:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+			w:SetPoint("TOP", t, "BOTTOM", 0, -3)
+			w:SetWidth(46)
+			w:SetWordWrap(false)
+			c.slots[i], c.badges[i], c.plus[i], c.words[i] = t, b, p, w
+		end
+		c.extra = fs("GameFontDisableSmall")
+		c.extra:SetPoint("LEFT", c.slots[1], "RIGHT", 8, 0)
+		c.note = fs("GameFontNormalSmall")
+		c.note:SetTextColor(0.25, 1, 0.25)
+		c.note:SetPoint("TOPLEFT", 10, -100)
+		c.note:SetPoint("RIGHT", c, "RIGHT", -10, 0)
+		c.ask = CreateFrame("Button", nil, c, "UIPanelButtonTemplate")
+		c.ask:SetSize(100, 20)
+		c.ask:SetPoint("BOTTOMLEFT", 8, 8)
+		c.tell = CreateFrame("Button", nil, c, "UIPanelButtonTemplate")
+		c.tell:SetSize(80, 20)
+		c.tell:SetPoint("LEFT", c.ask, "RIGHT", 6, 0)
+		c.tell:SetText("Whisper")
+		c.mark = c:CreateTexture(nil, "OVERLAY")
+		c.mark:SetPoint("TOPLEFT", 1, -1) c.mark:SetPoint("BOTTOMRIGHT", -1, 1)
+		c.mark:SetColorTexture(1, 0.82, 0.2, 0.08)
+		c:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+		c:SetScript("OnClick", function(self, button)
+			local d = self.d
+			if not d then return end
+			selected = d.l.leader
+			if button == "RightButton" then L.onChange() browse.personMenu(self, d.l.leader, d.l) return end
+			W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON")
+			L.onChange()
+		end)
+		c:SetScript("OnDoubleClick", function(self) if self.d then selected = self.d.l.leader browse.primary() end end)
+		c.ask:SetScript("OnClick", function(self) local d = self:GetParent().d if d then selected = d.l.leader browse.primary() end end)
+		c.tell:SetScript("OnClick", function(self) local d = self:GetParent().d if d and browse.openWhisper then browse.openWhisper(d.l.leader) end end)
+		c:SetScript("OnEnter", function(self)
+			local d = self.d
+			if not d then return end
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:AddLine(listingTitle(d.l), 1, 1, 1, true)
+			for _, sl in ipairs(self.slotList or {}) do
+				if sl.kind == "member" then GameTooltip:AddLine((W.className(sl.class) or "?") .. ((sl.role or 0) > 0 and (", " .. W.ROLE_NAME[sl.role]) or ""), .9, .9, .9)
+				elseif sl.kind == "open" then GameTooltip:AddLine("Looking for: " .. W.ROLE_NAME[sl.role or 0], .25, 1, .25)
+				elseif sl.kind == "unknown" then GameTooltip:AddLine("Someone in the group", .6, .6, .6) end
+			end
+			GameTooltip:AddLine("Click to select, double-click to ask. Right-click for more.", 0, 1, 0, true)
+			GameTooltip:Show()
+		end)
+		c:SetScript("OnLeave", GameTooltip_Hide)
+		return c
+	end
+
+	local function paint(c, d)
+		c.d = d
+		local l, r = d.l, d.r
+		local lvl = UnitLevel("player")
+		local hex = r.act and A.levelColor(r.act, lvl) or WHITE
+		local title = (r.act and (A.name(r.act) or "?")) or listingTitle(l)
+		c.act:SetText(hex .. title .. "|r" .. ((r.min or 0) > 0 and ("  " .. hex .. (r.min == r.max and r.min or (r.min .. "-" .. r.max)) .. "|r") or ""))
+		local where = (r.where == "finder" and "Group Finder") or (r.where == "chat" and (l.chan or "LFG chat"))
+			or (r.chatPost and ("LFG " .. l.shard)) or (L.CHAN .. " " .. (l.shard or "?"))
+		c.meta:SetText(where .. "  " .. ago(time() - (l.got or time())))
+		if not W.setClassIcon(c.cls, l.class) then c.cls:SetTexture(QUESTION_ICON) end
+		c.who:SetText(W.classColor(l.class) .. L.short(l.leader) .. "|r" .. ((l.level or 0) > 0 and (GREY .. "  " .. l.level .. "|r") or ""))
+		local slots = browse.slotsOf(l, r)
+		c.slotList = slots
+		for i = 1, 5 do
+			local t, b, p, w, sl = c.slots[i], c.badges[i], c.plus[i], c.words[i], slots[i]
+			b:Hide() p:Hide() c.glows[i]:Hide()
+			if sl then
+				t:SetTexCoord(0, 1, 0, 1) t:SetDesaturated(false) t:SetVertexColor(1, 1, 1) t:SetAlpha(1)
+				if sl.kind == "member" then
+					if not (sl.class and W.setClassIcon(t, sl.class)) then t:SetTexture(DISC) t:SetVertexColor(0.45, 0.42, 0.38) t:SetAlpha(0.3) end
+					if (sl.role or 0) > 0 and W.ROLE_ATLAS[sl.role] then b:SetAtlas(W.ROLE_ATLAS[sl.role]) b:Show() end
+					w:SetText(ROLE_WORD[sl.role or 0] or (sl.class and W.className(sl.class)) or "")
+				elseif sl.kind == "unknown" then
+					t:SetTexture(DISC) t:SetVertexColor(0.45, 0.42, 0.38) t:SetAlpha(0.3) w:SetText(GREY .. "member ?|r")
+				elseif sl.kind == "play" then
+					t:SetAtlas(W.ROLE_ATLAS[sl.role]) w:SetText(ROLE_WORD[sl.role] or "")
+				elseif sl.kind == "open" then
+					W.spotIcon(t, sl.role, sl.class)
+					local mine = browse.slotWantsMe(sl)
+					c.glows[i]:SetVertexColor(mine and 1 or 0.3, mine and 0.8 or 1, mine and 0.2 or 0.35, 1)
+					c.glows[i]:Show()
+					w:SetText((mine and GOLD or GREEN) .. "need " .. ((ROLE_WORD[sl.role or 0] or "any"):lower()) .. "|r")
+				else
+					t:SetTexture(DISC) t:SetVertexColor(0.45, 0.42, 0.38) t:SetAlpha(0.18) w:SetText(GREY .. "open|r")
+				end
+				t:Show() w:Show()
+			else
+				t:Hide() w:Hide()
+			end
+		end
+		c.extra:SetText(slots.text and (GREY .. slots.text .. "|r") or "")
+		c.extra:ClearAllPoints()
+		if #slots > 0 then c.extra:SetPoint("LEFT", c.slots[#slots], "RIGHT", 8, 0) else c.extra:SetPoint("LEFT", c.slots[1], "LEFT", 0, 0) end
+		c.note:SetText((slots.needs and (GREEN .. slots.needs .. "|r" .. ((l.note or "") ~= "" and (GREY .. "  -  |r") or "")) or "") .. (l.note or ""))
+		local summon, bgq = r.kind == "summon", r.kind == "bgq"
+		c.ask:SetText(summon and "Request summon" or bgq and "Ask" or r.kind == "player" and "Invite" or "Ask to join")
+		c.ask:SetShown(not L.isMe(l.leader))
+		c.mark:SetShown(selected == l.leader)
+		c.bg:SetColorTexture(d.match and 0.1 or 0.13, d.match and 0.16 or 0.1, d.match and 0.07 or 0.06, 0.92)
+	end
+
+	local view = CreateScrollBoxListLinearView()
+	view:SetElementExtentCalculator(function(_, e) return e.header and 30 or (CARD_H + GAP) end)
+	view:SetElementInitializer("Frame", function(line, e)
+		if not line.built then
+			line.head = line:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+			line.head:SetPoint("LEFT", 10, 0)
+			line.headHit = CreateFrame("Button", nil, line)
+			line.headHit:SetAllPoints()
+			line.headHit:SetScript("OnClick", function(self)
+				local k = self:GetParent().headKey
+				if k then collapsed[k] = not collapsed[k] W.sound("IG_MAINMENU_OPTION_CHECKBOX_ON") L.onChange() end
+			end)
+			line.cards = { card(line), card(line) }
+			line.built = true
+		end
+		line.headKey = e.header
+		line.head:SetShown(e.header ~= nil)
+		line.headHit:SetShown(e.header ~= nil)
+		if e.header then
+			line.head:SetText(e.text .. "  " .. GREY .. "(" .. e.count .. ")|r")
+			for _, c in ipairs(line.cards) do c:Hide() end
+			return
+		end
+		local w = math.max(200, (line:GetWidth() or 600) - GAP) / 2
+		for k, c in ipairs(line.cards) do
+			local d = e.pair[k]
+			c:ClearAllPoints()
+			c:SetPoint("TOPLEFT", (k - 1) * (w + GAP), 0)
+			c:SetSize(w, CARD_H)
+			if d then paint(c, d) c:Show() else c:Hide() end
+		end
+	end)
+	ScrollUtil.InitScrollBoxListWithScrollBar(list, cbar, view)
+
+	-- the rows' items -> lines of up to two cards (a header has a line of its own)
+	function browse.cardLines(items)
+		local out, pend = {}, nil
+		for _, it in ipairs(items) do
+			if it.header then
+				if pend then out[#out + 1] = { pair = pend } pend = nil end
+				out[#out + 1] = it
+			else
+				if pend then pend[2] = it out[#out + 1] = { pair = pend } pend = nil else pend = { it } end
+			end
+		end
+		if pend then out[#out + 1] = { pair = pend } end
+		return out
+	end
+	function browse.showCards(items, on)
+		list:SetShown(on) cbar:SetShown(on)
+		box:SetShown(not on) bar:SetShown(not on)
+		if on then list:SetDataProvider(CreateDataProvider(browse.cardLines(items)), ScrollBoxConstants.RetainScrollPosition) end
+	end
+	browse.cardPaint = paint
+	browse.newCard = card
+end)()
+
+-- --------------------------------------------------------------------------------------------
+-- The activity picker: Browse's Activity filter as a checklist that stays open. Press a box and
+-- drag over others to give them all the same state (ticked or not, whichever the first press
+-- made it). Quick picks at the top; grouped by category, level-coloured like the menu. Closes on
+-- Esc or a click outside.
+
+;(function()
+	local panel = CreateFrame("Frame", "OpenGroupActivityPicker", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
+	panel:SetSize(300, 420)
+	panel:SetFrameStrata("DIALOG")
+	panel:EnableMouse(true)
+	panel:SetClampedToScreen(true)
+	if panel.SetBackdrop then
+		panel:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+			tile = true, tileSize = 16, edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+		panel:SetBackdropColor(0.06, 0.05, 0.03, 0.97)
+		panel:SetBackdropBorderColor(0.62, 0.48, 0.22, 1)
+	end
+	panel:Hide()
+	tinsert(UISpecialFrames, "OpenGroupActivityPicker")
+	local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+	title:SetPoint("TOPLEFT", 12, -10)
+	title:SetText("Activities")
+	local hint = panel:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+	hint:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -3)
+	hint:SetText("Press a box and drag to tick several.")
+	local close = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
+	close:SetPoint("TOPRIGHT", 0, 0)
+
+	local lvl = UnitLevel and UnitLevel("player") or 60
+	local function pickAll(test)
+		for k in pairs(filterActs) do filterActs[k] = nil end
+		for _, cat in ipairs(A.load()) do for _, id in ipairs(cat.acts) do if test(cat, id) then filterActs[id] = true end end end
+		L.onChange()
+		panel.refresh()
+	end
+	local quick = {
+		{ "For my level", function() pickAll(function(_, id) local i = A.get(id) return i and (i.min or 0) > 0 and lvl >= i.min - 3 and lvl <= (i.max or 60) + 3 end) end },
+		{ "Dungeons", function() pickAll(function(cat) return W.kindOf(cat.name) == "dungeon" end) end },
+		{ "Raids", function() pickAll(function(cat) return W.kindOf(cat.name) == "raid" end) end },
+		{ "Clear", function() pickAll(function() return false end) end },
+	}
+	local prev
+	for i, q in ipairs(quick) do
+		local b = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+		b:SetSize(i == 1 and 86 or 64, 20)
+		if prev then b:SetPoint("LEFT", prev, "RIGHT", 4, 0) else b:SetPoint("TOPLEFT", 10, -46) end
+		b:SetText(q[1])
+		b:SetScript("OnClick", q[2])
+		prev = b
+	end
+
+	-- painting: the state the first press gave, while the button is held
+	local painting
+	local function setOne(id, on)
+		filterActs[id] = on or nil
+	end
+	local list = CreateFrame("Frame", nil, panel, "WowScrollBoxList")
+	list:SetPoint("TOPLEFT", 8, -72)
+	list:SetPoint("BOTTOMRIGHT", -26, 10)
+	local sbar = CreateFrame("EventFrame", nil, panel, "MinimalScrollBar")
+	sbar:SetPoint("TOPLEFT", list, "TOPRIGHT", 6, 0)
+	sbar:SetPoint("BOTTOMLEFT", list, "BOTTOMRIGHT", 6, 0)
+	local view = CreateScrollBoxListLinearView()
+	view:SetElementExtent(20)
+	view:SetElementInitializer("Button", function(row, e)
+		if not row.built then
+			row.check = row:CreateTexture(nil, "ARTWORK")
+			row.check:SetSize(16, 16)
+			row.check:SetPoint("LEFT", 4, 0)
+			row.label = row:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+			row.label:SetPoint("LEFT", 24, 0)
+			row.label:SetPoint("RIGHT", -4, 0)
+			row.label:SetJustifyH("LEFT")
+			row.label:SetWordWrap(false)
+			row.hl = row:CreateTexture(nil, "HIGHLIGHT")
+			row.hl:SetAllPoints()
+			row.hl:SetColorTexture(1, 0.9, 0.6, 0.08)
+			row:SetScript("OnMouseDown", function(self, button)
+				if button ~= "LeftButton" or not self.e or not self.e.id then return end
+				painting = not filterActs[self.e.id]
+				setOne(self.e.id, painting)
+				panel.paintRow(self)
+				L.onChange()
+			end)
+			row:SetScript("OnEnter", function(self)
+				if painting ~= nil and self.e and self.e.id and IsMouseButtonDown and IsMouseButtonDown("LeftButton") then
+					setOne(self.e.id, painting)
+					panel.paintRow(self)
+					L.onChange()
+				end
+			end)
+			row:SetScript("OnMouseUp", function() painting = nil end)
+			row.built = true
+		end
+		row.e = e
+		panel.paintRow(row)
+	end)
+	ScrollUtil.InitScrollBoxListWithScrollBar(list, sbar, view)
+	function panel.paintRow(row)
+		local e = row.e
+		if not e then return end
+		if e.title then
+			row.check:Hide()
+			row.label:SetPoint("LEFT", 4, 0)
+			row.label:SetText(GOLD .. e.title .. "|r")
+			return
+		end
+		row.label:SetPoint("LEFT", 24, 0)
+		row.check:Show()
+		row.check:SetTexture(filterActs[e.id] and "Interface\\Buttons\\UI-CheckBox-Check" or "Interface\\Buttons\\UI-CheckBox-Up")
+		row.label:SetText(W.levelText(e.id, lvl))
+	end
+	function panel.items()
+		local out = {}
+		for _, cat in ipairs(A.load()) do
+			local kind = W.kindOf(cat.name)
+			if #cat.acts > 0 and (kind == "dungeon" or kind == "raid" or kind == "custom" or kind == "battle") then
+				out[#out + 1] = { title = cat.name }
+				for _, id in ipairs(cat.acts) do out[#out + 1] = { id = id } end
+			end
+		end
+		return out
+	end
+	function panel.refresh()
+		lvl = UnitLevel and UnitLevel("player") or lvl
+		list:SetDataProvider(CreateDataProvider(panel.items()), ScrollBoxConstants.RetainScrollPosition)
+	end
+	-- the button released anywhere ends a drag; a click outside closes
+	panel:SetScript("OnUpdate", function() if painting ~= nil and IsMouseButtonDown and not IsMouseButtonDown("LeftButton") then painting = nil end end)
+	pcall(panel.RegisterEvent, panel, "GLOBAL_MOUSE_DOWN")
+	panel:SetScript("OnEvent", function(self) if self:IsShown() and not self:IsMouseOver() then self:Hide() end end)
+
+	function browse.openActivityPicker(anchor)
+		panel:ClearAllPoints()
+		panel:SetPoint("TOPLEFT", anchor or browse.filterBtn, "BOTTOMLEFT", 0, -4)
+		panel.refresh()
+		panel:Show()
+	end
+	browse.activityPicker = panel
+	browse.pickerPaint = function(id, on) setOne(id, on) end
+end)()
+
+-- --------------------------------------------------------------------------------------------
+-- Matches while you're listed: a popup when someone turns up for the same thing who fits. A group
+-- leader hears about players who play a role the group still needs; a solo player about groups
+-- that need a role they play (or don't say). Every source counts: OpenGroup listings and chat
+-- posts arrive as they happen, the game's Group Finder ones when anyone runs a search. Each
+-- person is announced once per listing, at most one popup every 15 seconds (several at once:
+-- "3 new for Blackrock Depths"), none in combat (they wait until after).
+
+;(function()
+	local seen, queue, lastAt = {}, {}, -1000
+	local GAP = 15
+	local function where(l)
+		if l.src == "finder" or l.src == "remote" then return "Group Finder" end
+		if l.src == "chat" or l.src == "remotechat" then return "LFG chat" end
+		return "OpenGroup"
+	end
+	-- does this listing want us, or bring what we want?
+	function browse.wantsUs(l)
+		if not matchesMine(l) then return false end
+		return (l.need or 0) == 0 or roleFit(l)
+	end
+	function browse.checkMatches()
+		local m = L.mine
+		if not m or db().matchAlerts == false then return 0 end
+		local title = L.titleOf(m)
+		for _, src in ipairs({ L.listings, L.nearby, L.remote or {} }) do
+			for name, l in pairs(src) do
+				local key = L.short(name) .. "|" .. title
+				if not seen[key] and not (L.ignored and L.ignored(name)) and browse.wantsUs(l) then
+					seen[key] = true
+					queue[#queue + 1] = l
+				end
+			end
+		end
+		return browse.flushMatches()
+	end
+	function browse.flushMatches()
+		if #queue == 0 or not L.mine then return 0 end
+		if InCombatLockdown and InCombatLockdown() then return 0 end
+		local t = GetTime()
+		if t - lastAt < GAP then return 0 end
+		lastAt = t
+		local list = queue
+		queue = {}
+		local title = L.titleOf(L.mine)
+		local leaderCase = iAmLeader()
+		local sound = db().matchSound ~= false
+		local l = list[1]
+		local who = W.classColor(l.class) .. L.short(l.leader) .. "|r"
+		local small
+		if #list > 1 then
+			small = ("%d new for %s"):format(#list, title)
+		elseif leaderCase then
+			small = ((l.need or 0) > 0 and roleNames(l.need) or "A player") .. " for " .. title .. " (" .. where(l) .. ")"
+		else
+			small = "A group for " .. title .. " wants you (" .. where(l) .. ")"
+		end
+		OpenGroup_Alert.show({
+			head = "OpenGroup", small = small, name = #list > 1 and (who .. " and " .. (#list - 1) .. " more") or who,
+			roles = (l.need or 0) > 0 and l.need or nil, class = l.class, icon = L.ICON,
+			quiet = not sound,
+			onClick = function() if browse.focus then browse.focus(l.leader) end end,
+		})
+		L.print(("%s %s: %s. Click the popup or open Browse to %s."):format(#list > 1 and (#list .. " new") or "new", leaderCase and "players" or "group",
+			#list > 1 and (L.short(l.leader) .. " and " .. (#list - 1) .. " more") or L.short(l.leader), leaderCase and "invite" or "ask to join"))
+		if OpenGroup_Minimap and OpenGroup_Minimap.flash then OpenGroup_Minimap.flash() end
+		return #list
+	end
+	function browse.resetMatches() seen, queue, lastAt = {}, {}, -1000 end
+	if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(3, function() pcall(browse.checkMatches) end) end
+end)()
+
 local sideTabs = {}
 sideTabs[1] = sideTab("browse", "Interface\\Icons\\INV_Misc_GroupLooking", "Browse groups")
 sideTabs[2] = sideTab("list", "Interface\\Icons\\INV_Misc_GroupNeedMore", "List a group", sideTabs[1])
-sideTabs[3] = sideTab("network", "Interface\\Icons\\INV_Misc_Gem_Amethyst_02", "Shards and players", sideTabs[2])
-sideTabs[4] = sideTab("whispers", "Interface\\Icons\\INV_Letter_15", "Whispers", sideTabs[3])
+sideTabs[3] = sideTab("chat", "Interface\\Icons\\INV_Misc_Coin_02", "World chat (LFG and Trade from every chat number)", sideTabs[2])
+sideTabs[4] = sideTab("find", "Interface\\Icons\\INV_Misc_Spyglass_03", "Find players (/who)", sideTabs[3])
+sideTabs[5] = sideTab("whispers", "Interface\\Icons\\INV_Letter_15", "Whispers", sideTabs[4])
+sideTabs[6] = sideTab("network", "Interface\\Icons\\INV_Misc_Gear_01", "Settings and network", sideTabs[5])
 do
 	-- unread whispers: a gold count on the tab
-	local badge = sideTabs[4]:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	local badge = sideTabs[5]:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	badge:SetPoint("BOTTOMRIGHT", -4, 4)
 	whispers.badge = function() local n = L.whisperUnread() badge:SetText(n > 0 and ("|cffffd100" .. n .. "|r") or "") end
 	whispers.badge()
@@ -3194,7 +4676,7 @@ win:SetScript("OnShow", function()
 end)
 C_Timer.NewTicker(2, refresh)
 
-OpenGroup_UI = { list = list, browse = browse, personItems = function(n, l) return browse.personItems(n, l) end, win = win, lastTab = sideTabs[4], whisper = function(name) browse.openWhisper(name) end, showPage = showPage, qbar = qbar, toggle = function(tab)
+OpenGroup_UI = { list = list, browse = browse, personItems = function(n, l) return browse.personItems(n, l) end, win = win, lastTab = sideTabs[6], find = finder, chat = chatPage, whisper = function(name) browse.openWhisper(name) end, showPage = showPage, qbar = qbar, toggle = function(tab)
 	if win:IsShown() and (not tab or db().tab == tab) then win:Hide() return end
 	if tab then db().tab = tab end
 	win:Show()
@@ -3210,6 +4692,33 @@ SlashCmdList.OPENGROUP = function(msg)
 		L.post(rest, "", 0)
 	elseif cmd == "delist" then
 		L.delist()
+	elseif cmd == "bug" or cmd == "report" then
+		L.showReport()
+	elseif cmd == "who2" then
+		-- debug: does one /who with two classes return both? (from this command's keypress)
+		local q = 'c-"Warrior" c-"Mage" 58-60'
+		L.print("/who " .. q .. " ...")
+		local ok = L.scan.find(q, function(list, n)
+			local seen = {}
+			for _, info in ipairs(list or {}) do local c = info.classStr or info.filename or "?" seen[c] = (seen[c] or 0) + 1 end
+			local parts = {}
+			for c, k in pairs(seen) do parts[#parts + 1] = c .. " " .. k end
+			L.print(("/who two classes: %d matched; came back: %s"):format(n or 0, #parts > 0 and table.concat(parts, ", ") or "nobody"))
+		end)
+		if not ok then L.print("a /who is already running, try again in a moment.") end
+	elseif cmd == "chatlog" then
+		-- debug, off by default: keep the last 300 LookingForGroup / Trade lines and what the parser
+		-- made of them in SavedVariables (OpenGroupDB.chatlog), to tune it against real chat
+		local Nb = OpenGroup_Nearby
+		if rest == "on" then db().chatlog = { on = true, lines = (type(db().chatlog) == "table" and db().chatlog.lines) or {} } L.print("chat log on: the last 300 LFG/Trade lines are kept until /og chatlog off. /reload or log out to write them to disk.")
+		elseif rest == "off" then if type(db().chatlog) == "table" then db().chatlog.on = false end L.print("chat log off (lines kept; /og chatlog clear removes them).")
+		elseif rest == "clear" then db().chatlog = nil L.print("chat log cleared.")
+		else
+			local c = type(db().chatlog) == "table" and db().chatlog or {}
+			local n, hit = 0, 0
+			for _, e in ipairs(c.lines or {}) do n = n + 1 if e.got ~= "" then hit = hit + 1 end end
+			L.print(("chat log %s: %d lines, %d parsed as a group or player. /og chatlog on | off | clear"):format(c.on and "on" or "off", n, hit))
+		end
 	elseif cmd == "ping" and rest ~= "" then
 		L.ping(rest)
 	elseif cmd == "auto" then
@@ -3248,16 +4757,28 @@ SlashCmdList.OPENGROUP = function(msg)
 		for _, line in ipairs(L.shardReport()) do L.print(line) end
 	elseif cmd == "status" then
 		local s = L.stats
-		L.print(("shard %d, %d players known, %d groups, sent %d, refused %d (%s), received %d, bad %d%s"):format(
-			L.shard(), L.count(L.peers), L.count(L.listings), s.sent, s.refused, tostring(L.lastRefusal or "-"),
+		L.print(("%s, %d players known, %d groups, sent %d, refused %d (%s), received %d, bad %d%s"):format(
+			OpenGroup_Nearby and OpenGroup_Nearby.serverName() or (L.CHAN .. " " .. L.shard()), L.count(L.peers), L.count(L.listings), s.sent, s.refused, tostring(L.lastRefusal or "-"),
 			s.got, s.bad, L.lastError and (", last error: " .. tostring(L.lastError)) or ""))
+		local why = {}
+		for k, v in pairs(L.probeWhy or {}) do why[#why + 1] = k .. " " .. v end
+		table.sort(why)
+		L.print(("hellos %d (%s); people around you waiting %d, asked this session %d"):format(s.probes or 0,
+			#why > 0 and table.concat(why, ", ") or "none yet", #(L.nearQueue or {}), L.count(L.nearAsked or {})))
+		local Nf = OpenGroup_Nearby
+		if Nf and Nf.feed then
+			local st = Nf.stats
+			L.print(("World chat: %d lines kept; sent %d, received %d, passed on %d, left out by the budget %d, backlogs answered %d, repairs asked %d, resent after someone left %d; in Trade: %s; sharing LFG %s, Trade %s"):format(
+				#Nf.feed, st.feedOut or 0, st.feedIn or 0, st.feedFwd or 0, st.feedDropped or 0, st.backlogs or 0, st.repairs or 0, st.failovers or 0,
+				Nf.inTrade() and "yes" or "no", Nf.shareChat() and "on" or "off", Nf.shareTrade() and "on" or "off"))
+		end
 		local found = {}
 		for _, n in ipairs({ "LFGParentFrame", "PVEFrame", "GroupFinderFrame", "LFGListingFrame" }) do if _G[n] then found[#found + 1] = n end end
 		L.print("Group Finder tab on: " .. tostring(OpenGroup_GroupFinderTab and OpenGroup_GroupFinderTab.attach() and "yes" or "not yet") ..
 			" (frames seen: " .. (#found > 0 and table.concat(found, ", ") or "none") .. ")")
 		local Nb = OpenGroup_Nearby
 		if Nb then
-			L.print(("your shard: %d from the Group Finder, %d from chat (%d chat posts read, %d searches, %d posted to LookingForGroup, channel %s)"):format(
+			L.print(("your server: %d from the Group Finder, %d from chat (%d chat posts read, %d searches, %d posted to LookingForGroup, channel %s)"):format(
 				Nb.count("finder"), Nb.count("chat"), Nb.stats.chat, Nb.stats.searches, Nb.stats.posted, tostring(Nb.lfgChannel() or "not joined")))
 			if Nb.blocked then L.print(("blocked by the game this session: %s (%d times)"):format(Nb.blocked, Nb.blockedCount or 1) .. (Nb.noSearch and " (Group Finder searches paused)" or "")) end
 			local by = {}
@@ -3266,13 +4787,13 @@ SlashCmdList.OPENGROUP = function(msg)
 			local tot, seen = Nb.stats.overlapTotal or 0, Nb.stats.overlapSeen or 0
 			local ov = Nb.overlapText and Nb.overlapText()
 			if ov then L.print("Group Finder matches yours: " .. ov) end
-			L.print(("other shards' Group Finder: %d groups from here to share, %d sent so far; received %s%s"):format(
+			L.print(("other servers' Group Finder: %d groups from here to share, %d sent so far; received %s%s"):format(
 				Nb.stats.harvested or 0, Nb.stats.reported or 0, #by > 0 and table.concat(by, ", ") or "none yet",
 				tot > 0 and ("; %d%% of received were already in your own results (%d of %d)"):format(math.floor(100 * seen / tot + 0.5), seen, tot) or ""))
 			local cb2 = {}
 			for shard, n in pairs(Nb.stats.chatBy or {}) do cb2[#cb2 + 1] = ("shard %d: %d"):format(shard, n) end
 			table.sort(cb2)
-			L.print(("other shards' LFG chat: sharing %s, %d posts sent so far; received %s"):format(
+			L.print(("other servers' LFG chat: sharing %s, %d posts sent so far; received %s"):format(
 				Nb.shareChat() and "on" or "off", Nb.stats.chatShared or 0, #cb2 > 0 and table.concat(cb2, ", ") or "none yet"))
 			if Nb.blockedFrom then
 				L.print(("the search was %.2fs before the block, called from:"):format(Nb.blockedAfter or -1))
@@ -3298,6 +4819,6 @@ SlashCmdList.OPENGROUP = function(msg)
 		L.print("tile pictures: " .. table.concat(tiles, ", "))
 	else
 		win:SetShown(not win:IsShown())
-		if win:IsShown() then L.scan.auto(false) end
+		-- (no search on opening: the game only allows them from a button, and never in combat)
 	end
 end

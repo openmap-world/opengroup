@@ -9,6 +9,9 @@ L.ICON = "Interface\\AddOns\\OpenGroup\\Media\\icon"
 L.ICON_SQUARE = "Interface\\AddOns\\OpenGroup\\Media\\icon-square"
 
 L.VERSION = P.VERSION
+-- The word shown before the channel number ("Chat 47"). The number is the one the game puts after
+-- every global channel (Trade, LookingForGroup, General), so it isn't named after one of them.
+L.CHAN = "Chat"
 L.peers = {}        -- [name] = { shard, level, seen }   OpenGroup users we can whisper (saved)
 L.listings = {}     -- [leader] = { leader, seq, shard, level, size, title, note, hops, got, age, via }
 L.mine = nil        -- our own listing while we're listed
@@ -24,8 +27,8 @@ local ANNOUNCE_PEERS = 25         -- to this many peers per round (rotating)
 local RELAY_COUNT = 3
 local OFFLINE_FOR = 600           -- a peer the game says is offline is skipped this long
 local PEER_MAX = 600              -- remember at most this many (newest kept)
-local PX_SEND = 8                 -- names to share in a peer exchange
-local PX_PROBE = 8                -- hellos to send per peer exchange we receive
+local PX_SEND = 20                -- names to share in a peer exchange (sent as messages of P.MAX_PX)
+local PX_PROBE = 20               -- hellos to send per peer exchange message we receive
 
 -- --------------------------------------------------------------------------------------------
 -- helpers
@@ -113,6 +116,33 @@ function L.shard()
 	end
 	return L.shardSeen or 0
 end
+
+-- Our chat number can change: joining a group on another server shard or layer, a zone change, or
+-- the game moving us. Check after those events (and a moment later, once the channels have
+-- rejoined); when it changed, tell the OpenGroup players we heard from lately with a hello, so
+-- they file us under the new number, and redraw. At most one round of hellos per 30 seconds.
+L.lastShard = nil
+local shardToldAt = -1000
+function L.checkShard()
+	local n = L.shard()
+	if n <= 0 or n == L.lastShard then return false end
+	local old = L.lastShard
+	L.lastShard = n
+	if old and old > 0 then
+		L.shardChanges = (L.shardChanges or 0) + 1
+		if now() - shardToldAt >= 30 then
+			shardToldAt = now()
+			for _, name in ipairs(L.recent(15, true)) do L.send(name, P.hello(n, UnitLevel("player")), true) end
+		end
+		if L.onChange then pcall(L.onChange) end
+	end
+	return true
+end
+local function checkSoon()
+	pcall(L.checkShard)
+	if C_Timer and C_Timer.After then C_Timer.After(3, function() pcall(L.checkShard) end) end
+end
+L.checkShardSoon = checkSoon
 
 -- Everything the game says about our channels, for /og shard (the "?" hunt).
 function L.shardReport()
@@ -207,6 +237,42 @@ function L.probe(name, why)
 	return true
 end
 
+-- Players around you: the ones you mouse over and whose nameplates show up get a quiet hello too
+-- (same faction, real players, not in instances or combat). A small queue, one hello every 2
+-- seconds, the oldest dropped past 30; anyone asked this way isn't asked again this session
+-- (only OpenGroup users answer, so most never do).
+L.nearQueue, L.nearAsked = {}, {}
+local NEAR_MAX = 30
+function L.noteNearby(unit)
+	if type(OpenGroupDB) == "table" and OpenGroupDB.nearHello == false then return false end
+	if not UnitIsPlayer or not UnitIsPlayer(unit) then return false end
+	if UnitIsUnit and UnitIsUnit(unit, "player") then return false end
+	if UnitFactionGroup and UnitFactionGroup(unit) ~= UnitFactionGroup("player") then return false end
+	if IsInInstance then local inside = IsInInstance() if inside then return false end end
+	local name = L.unitName(unit)
+	if not name or (canaccessvalue and not canaccessvalue(name)) then return false end
+	name = L.short(name)
+	if L.peers[name] or L.nearAsked[name] or L.isMe(name) then return false end
+	for _, n in ipairs(L.nearQueue) do if n == name then return false end end
+	L.nearQueue[#L.nearQueue + 1] = name
+	while #L.nearQueue > NEAR_MAX do table.remove(L.nearQueue, 1) end
+	-- the 2-second drip starts with the first player noticed
+	if not L.nearTicker and C_Timer and C_Timer.NewTicker then L.nearTicker = C_Timer.NewTicker(2, function() pcall(L.nearTick) end) end
+	return true
+end
+-- the next one in the queue: every 2 seconds
+function L.nearTick()
+	if InCombatLockdown and InCombatLockdown() then return false end
+	while #L.nearQueue > 0 do
+		local name = table.remove(L.nearQueue, 1)
+		if not L.peers[name] and not L.nearAsked[name] then
+			L.nearAsked[name] = true
+			if L.probe(name, "nearby") then return true end
+		end
+	end
+	return false
+end
+
 -- who to tell a newcomer about: recently heard, live, other shards than theirs first
 local function shareList(to, toShard, max)
 	local far, near = {}, {}
@@ -222,21 +288,39 @@ local function shareList(to, toShard, max)
 	return out
 end
 
+-- up to PX_SEND names, newest first and other chat numbers first, in messages of at most P.MAX_PX
+-- (what older versions read from one message)
 local function sharePeers(to, toShard)
-	local msg = P.peerList(shareList(to, toShard, PX_SEND))
-	if msg then L.send(to, msg) end
+	local list = shareList(to, toShard, PX_SEND)
+	local i = 1
+	while i <= #list do
+		local chunk = {}
+		for k = i, math.min(#list, i + P.MAX_PX - 1) do chunk[#chunk + 1] = list[k] end
+		local msg = P.peerList(chunk)
+		if msg then L.send(to, msg) end
+		i = i + P.MAX_PX
+	end
 end
+L.sharePeers = sharePeers
 
-local function notePeerVersion(v)
+-- "a newer OpenGroup is out": only for released versions. A local test build ("-test", "-dev")
+-- someone is trying isn't out, and must not send everyone else looking for it.
+L.newerFrom = {}   -- [version] = { [sender] = true }: who runs a newer released version
+function L.notePeerVersion(v, sender)
+	if P.isPrerelease(v) then return end
 	local n = P.versionNumber(v)
 	if not n then return end
 	local mine = P.versionNumber(L.VERSION) or 0
-	if n > mine and n > (P.versionNumber(L.newest) or 0) then
-		L.newest = v
-		if not L.toldNewer then
-			L.toldNewer = true
-			L.print(("a newer OpenGroup (%s) is out; you have %s. Update when you can."):format(v, L.VERSION))
-		end
+	if n <= mine or n <= (P.versionNumber(L.newest) or 0) then return end
+	-- at least two different players run it before we say it's out
+	local from = L.newerFrom[v] or {}
+	L.newerFrom[v] = from
+	if sender then from[L.short(sender)] = true end
+	if L.count(from) < 2 then return end
+	L.newest = v
+	if not L.toldNewer then
+		L.toldNewer = true
+		L.print(("a newer OpenGroup (%s) is out; you have %s. Update when you can."):format(v, L.VERSION))
 	end
 end
 
@@ -340,7 +424,7 @@ function L.receive(msg, sender)
 	if kind == "H1" then
 		local isNew = L.peers[sender] == nil
 		L.addPeer(sender, d.shard, d.level, d.version)
-		notePeerVersion(d.version)
+		L.notePeerVersion(d.version, sender)
 		-- answer a given sender's hello at most every 30 seconds (one hello makes several whispers)
 		if answeredAt[sender] and now() - answeredAt[sender] < 30 then return end
 		answeredAt[sender] = now()
@@ -352,7 +436,7 @@ function L.receive(msg, sender)
 	elseif kind == "A1" then
 		local isNew = L.peers[sender] == nil
 		L.addPeer(sender, d.shard, d.level, d.version)
-		notePeerVersion(d.version)
+		L.notePeerVersion(d.version, sender)
 		if L.mine then L.send(sender, P.listing(L.mineForSend())) end
 		if isNew then sharePeers(sender, d.shard) end
 		if isNew and L.onPeer then L.onPeer(sender) end
@@ -368,7 +452,7 @@ function L.receive(msg, sender)
 	elseif kind == "Q1" then
 		local p = L.pings[d.token]
 		if p then
-			L.print(("ping to %s came back from shard %d in %.1fs: hidden whispers reach them."):format(
+			L.print(("ping to %s came back from " .. L.CHAN .. " %d in %.1fs: hidden whispers reach them."):format(
 				L.short(sender), d.shard, GetTime() - p.at))
 			L.pings[d.token] = nil
 		end
@@ -391,6 +475,11 @@ function L.receive(msg, sender)
 		-- another shard's Group Finder groups (Nearby keeps them)
 		if L.peers[sender] then L.peers[sender].seen = now() end
 		if L.onFinderDigest then pcall(L.onFinderDigest, sender, d) end
+	elseif kind == "T1" then
+		if L.peers[sender] then L.peers[sender].seen = now() end
+		if L.onFeed then pcall(L.onFeed, sender, d, msg) end
+	elseif kind == "B1" then
+		if L.onBacklogAsk then pcall(L.onBacklogAsk, sender, d) end
 	elseif kind == "C1" then
 		if L.peers[sender] then L.peers[sender].seen = now() end
 		if L.onChatDigest then pcall(L.onChatDigest, sender, d) end
@@ -419,12 +508,28 @@ end
 
 -- age on the wire is "seconds since the leader last sent this", not since it was first listed:
 -- a listing older than five minutes used to be rejected everywhere even while its leader was on.
+-- who's in our party, for the listing: class and role (the game's assigned role where set), the
+-- leader (us) first; nil solo or in a raid
+function L.partyMembers()
+	if (GetNumGroupMembers and GetNumGroupMembers() or 0) <= 1 or (IsInRaid and IsInRaid()) then return nil end
+	local ROLE = { TANK = 1, HEALER = 2, DAMAGER = 4 }
+	local out = {}
+	for _, u in ipairs({ "player", "party1", "party2", "party3", "party4" }) do
+		if u == "player" or (UnitExists and UnitExists(u)) then
+			local ok, _, cls = pcall(UnitClass, u)
+			local r = UnitGroupRolesAssigned and select(2, pcall(UnitGroupRolesAssigned, u))
+			if ok and type(cls) == "string" then out[#out + 1] = { class = cls, role = ROLE[r] or 0 } end
+		end
+	end
+	return #out > 1 and out or nil
+end
+
 function L.mineForSend()
 	local m = L.mine
 	return { leader = L.me(), seq = m.seq, shard = L.shard(), level = UnitLevel("player"),
 		size = math.max(1, GetNumGroupMembers()), age = 0, hops = 0,
 		class = select(2, UnitClass("player")) or "", need = m.need or 0, cat = m.cat or 0, acts = m.acts or {}, price = m.price or 0, quest = m.quest or 0,
-		title = m.title, note = m.note, spots = m.spots }
+		title = m.title, note = m.note, spots = m.spots, members = L.partyMembers() }
 end
 
 local announceAt = 1
@@ -499,7 +604,7 @@ function L.post(title, note, need, cat, acts, price, quest, spots)
 	if L.onListed then L.onListed(first) end
 	L.announce()
 	if first then
-		L.print(("listed \"%s\" to %d OpenGroup users (shard %d)."):format(L.titleOf(L.mine), math.min(ANNOUNCE_PEERS, L.count(L.peers)), L.shard()))
+		L.print(("listed \"%s\" to %d OpenGroup users (" .. L.CHAN .. " %d)."):format(L.titleOf(L.mine), math.min(ANNOUNCE_PEERS, L.count(L.peers)), L.shard()))
 	end
 	if L.onChange then L.onChange() end
 	return true
@@ -607,7 +712,11 @@ local function hideOurMisses(_, _, text)
 	if not at or now() - at > 30 then return false end
 	L.stats.missed = L.stats.missed + 1
 	for peer, p in pairs(L.peers) do
-		if L.short(peer) == short then p.off = now() end
+		if L.short(peer) == short then
+			p.off = now()
+			-- every miss: World chat resends whatever went to them since the last one
+			if L.onPeerGone then pcall(L.onPeerGone, peer) end
+		end
 	end
 	return true
 end
@@ -673,6 +782,7 @@ f:RegisterEvent("CHAT_MSG_ADDON")
 f:RegisterEvent("CHAT_MSG_CHANNEL")
 f:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
 f:RegisterEvent("GROUP_ROSTER_UPDATE")
+for _, ev in ipairs({ "ZONE_CHANGED_NEW_AREA", "PLAYER_ENTERING_WORLD", "CHANNEL_UI_UPDATE" }) do pcall(f.RegisterEvent, f, ev) end
 f:RegisterEvent("CHAT_MSG_WHISPER")
 f:RegisterEvent("CHAT_MSG_WHISPER_INFORM")
 f:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4, ...)
@@ -682,13 +792,21 @@ f:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4, ...)
 		for _, name in ipairs({ a4, a9 }) do
 			if isShardChannel(name) then
 				local n = P.shardFromChannel(name)
-				if n then L.shardSeen, L.shardSeenFrom = n, tostring(name) return end
+				if n then
+					L.shardSeen, L.shardSeenFrom = n, tostring(name)
+					if ev == "CHAT_MSG_CHANNEL_NOTICE" or n ~= L.lastShard then pcall(L.checkShard) end
+					return
+				end
 			end
 		end
 		return
 	end
 	if ev == "GROUP_ROSTER_UPDATE" then
 		L.seedGroup()
+		checkSoon()
+		return
+	elseif ev == "ZONE_CHANGED_NEW_AREA" or ev == "PLAYER_ENTERING_WORLD" or ev == "CHANNEL_UI_UPDATE" then
+		checkSoon()
 		return
 	elseif ev == "CHAT_MSG_WHISPER" or ev == "CHAT_MSG_WHISPER_INFORM" then
 		L.seedWhisper(a2)
@@ -743,25 +861,37 @@ end)
 local function hasBit(bits, b) return (bits or 0) % (b * 2) >= b end
 
 -- where: "other" (OpenGroup, another shard), "mine" (OpenGroup, your shard), "finder", "chat"
-function L.rowOf(l, myShard)
+-- prefer(id): an optional test for the activity to show it under (the one the player filtered or
+-- searched for), when a listing has several
+function L.rowOf(l, myShard, prefer)
 	local A, Q = OpenGroup_Activities, OpenGroup_Quests
 	local r = { l = l, leader = l.leader or "?", class = l.class, level = l.level or 0, size = l.size or 1,
-		need = l.need or 0, spots = l.spots, note = l.note or "", got = l.got or 0, shard = l.shard or 0, cat = l.cat or 0 }
+		need = l.need or 0, spots = l.spots, members = l.members, note = l.note or "", got = l.got or 0, shard = l.shard or 0, cat = l.cat or 0 }
 	r.where = l.src == "finder" and "finder" or l.src == "chat" and "chat" or (l.shard == myShard and "mine" or "other")
 	-- another shard's Group Finder group or LFG post, passed on by an OpenGroup player there
 	r.remote = l.src == "remote" or l.src == "remotechat"
 	r.gf, r.chatPost = l.src == "remote", l.src == "remotechat"
 	r.kind = l.cat == P.SUMMON_CAT and "summon" or P.isBGQ(l.cat) and "bgq" or (r.size > 1 and "group" or "player")
-	-- the activity: the first one we know names it; the level range covers all of them
-	local min, max
+	-- the activity: the one the player is looking for, else the first one we know; the level range
+	-- covers all of them. actNames: every activity's name, for the search box
+	local min, max, names, picked = nil, nil, {}, nil
 	for _, id in ipairs(l.acts or {}) do
 		local i = A and A.get and A.get(id)
 		if i then
 			r.act = r.act or id
+			if not picked and prefer and prefer(id) then picked = id end
+			names[#names + 1] = A.searchText and A.searchText(id) or (i.name or "")
+			r.acts = r.acts or {}
+			r.acts[#r.acts + 1] = id
+			if prefer and prefer(id) then r.wanted = r.wanted or {} r.wanted[#r.wanted + 1] = id end
 			if (i.min or 0) > 0 then min = math.min(min or i.min, i.min) end
 			if (i.max or 0) > 0 then max = math.max(max or i.max, i.max) end
 		end
 	end
+	if picked then r.act = picked end
+	r.actNames = table.concat(names, " ")
+	-- a chat post that named levels ("48-52", "50+") and no activity we know
+	if not min and not max and (l.lmin or 0) > 0 then min, max = l.lmin, l.lmax or 60 end
 	if (l.quest or 0) > 0 then
 		local ql = Q and Q.level and Q.level(l.quest)
 		if ql then min, max = ql, ql end
@@ -866,12 +996,32 @@ end
 function L.groupRows(rows, by)
 	if by ~= "act" and by ~= "shard" then return nil end
 	local groups, index = {}, {}
-	for _, r in ipairs(rows) do
+	local A = OpenGroup_Activities
+	local expanded = rows
+	if by == "act" then
+		expanded = {}
+		for _, r in ipairs(rows) do
+			local ids = r.wanted or r.acts
+			if r.kind ~= "summon" and r.kind ~= "bgq" and ids and (#ids > 1 or (r.wanted and #(r.acts or {}) > 1)) then
+				for _, id in ipairs(ids) do
+					local c = {}
+					for k, v in pairs(r) do c[k] = v end
+					local i = A and A.get(id)
+					c.act, c.groupKey, c.groupName = id, "a" .. id, (A and A.name(id)) or r.groupName
+					if i and (i.min or 0) > 0 then c.min, c.max = i.min, i.max end
+					expanded[#expanded + 1] = c
+				end
+			else
+				expanded[#expanded + 1] = r
+			end
+		end
+	end
+	for _, r in ipairs(expanded) do
 		local key, text
 		if by == "act" then key, text = r.groupKey, r.groupName
 		else
 			key = r.where == "other" and ("s" .. r.shard) or r.where
-			text = r.where == "other" and ("Shard " .. r.shard) or r.where == "mine" and "Your shard" or r.where == "finder" and "Group Finder" or "LFG chat"
+			text = r.where == "other" and (L.CHAN .. " " .. r.shard) or r.where == "mine" and "Your server" or r.where == "finder" and "Group Finder" or "LFG chat"
 		end
 		local g = index[key]
 		if not g then
@@ -881,6 +1031,15 @@ function L.groupRows(rows, by)
 		end
 		g.rows[#g.rows + 1] = r
 		if (r.dist or 0) < g.dist then g.dist = r.dist end
+	end
+	-- within each activity: groups first, then solo players (keeping the sort order otherwise)
+	if by == "act" then
+		for _, g in ipairs(groups) do
+			local grp, solo = {}, {}
+			for _, r in ipairs(g.rows) do if r.kind == "player" then solo[#solo + 1] = r else grp[#grp + 1] = r end end
+			for _, r in ipairs(solo) do grp[#grp + 1] = r end
+			g.rows = grp
+		end
 	end
 	table.sort(groups, function(a, b)
 		if by == "shard" then return a.order < b.order end
@@ -906,9 +1065,9 @@ end
 -- what's left; when that gets too small, Leader and Where shrink, then the least useful columns go
 -- (Size, then Age, then Where).
 L.COLUMNS = {
-	{ key = "cls", w = 16 }, { key = "lvl", w = 22 }, { key = "leader", w = 112, min = 86 }, { key = "act", flex = true, min = 96 },
-	{ key = "levels", w = 50 }, { key = "size", w = 30, drop = 1 }, { key = "needs", w = 74 },
-	{ key = "where", w = 82, min = 66, drop = 3 }, { key = "age", w = 30, drop = 2 },
+	{ key = "cls", w = 16 }, { key = "lvl", w = 22 }, { key = "leader", w = 112, min = 80 }, { key = "act", flex = true, min = 96 },
+	{ key = "levels", w = 50, drop = 2 }, { key = "needs", w = 138 },
+	{ key = "where", w = 82, min = 66, drop = 3 }, { key = "age", w = 30, drop = 1 },
 }
 L.COL_GAP = 6
 function L.columns(width)
@@ -1099,16 +1258,19 @@ if CreateFrame then
 	local wf = CreateFrame("Frame")
 	wf:RegisterEvent("CHAT_MSG_WHISPER")
 	wf:RegisterEvent("CHAT_MSG_WHISPER_INFORM")
-	wf:SetScript("OnEvent", function(_, ev, text, who, ...)
+	L.whisperEvent = function(_, ev, text, who, ...)
 		local guid = select(10, ...)
 		local ok = pcall(function()
 			local out = ev == "CHAT_MSG_WHISPER_INFORM"
 			local viewing = L.whisperViewing and readable(who) and type(who) == "string" and L.short(who) == L.whisperViewing
 			local c = L.addWhisper(text, who, out, time(), viewing)
 			if c then L.notePerson(c.name, guid) end
+			-- a whisper that went out: Find players marks that person as asked
+			if c and out and L.onWhisperSent then pcall(L.onWhisperSent, c.name) end
 		end)
 		if ok and L.onWhisper then pcall(L.onWhisper) end
-	end)
+	end
+	wf:SetScript("OnEvent", L.whisperEvent)
 end
 
 -- --------------------------------------------------------------------------------------------
@@ -1252,3 +1414,47 @@ if CreateFrame then
 		members, leaderNow = n, leader
 	end)
 end
+
+-- --------------------------------------------------------------------------------------------
+-- Find players: the /who search for an open spot. Pure, for tests.
+
+-- the classes that can fill a role (P.TANK / HEALER / DAMAGE; 0 = any) on a faction
+function L.roleClasses(role, faction)
+	local out = {}
+	for _, cls in ipairs({ "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }) do
+		local bits = P.CLASS_ROLES[cls] or 0
+		local fits = role == 0 or role == nil or (bits % (role * 2) >= role)
+		local onFaction = not ((cls == "PALADIN" and faction == "Horde") or (cls == "SHAMAN" and faction == "Alliance"))
+		if fits and onFaction then out[#out + 1] = cls end
+	end
+	return out
+end
+
+-- q = { class (localized name or nil), min, max, zone, race, name } -> the /who text
+function L.whoQuery(q)
+	local parts = {}
+	local function quoted(prefix, v)
+		v = type(v) == "string" and v:gsub('"', ""):gsub("^%s+", ""):gsub("%s+$", "") or ""
+		if v ~= "" then parts[#parts + 1] = ('%s-"%s"'):format(prefix, v) end
+	end
+	quoted("n", q.name)
+	quoted("c", q.class)
+	quoted("r", q.race)
+	quoted("z", q.zone)
+	local lo, hi = P.int(q.min, 1, 200), P.int(q.max, 1, 200)
+	if lo and hi then
+		if lo > hi then lo, hi = hi, lo end
+		parts[#parts + 1] = lo == hi and tostring(lo) or (lo .. "-" .. hi)
+	elseif lo or hi then
+		parts[#parts + 1] = tostring(lo or hi)
+	end
+	return table.concat(parts, " ")
+end
+
+-- players around you (L.noteNearby, L.nearTick above)
+if CreateFrame then
+	local nf = CreateFrame("Frame")
+	for _, ev in ipairs({ "UPDATE_MOUSEOVER_UNIT", "NAME_PLATE_UNIT_ADDED" }) do pcall(nf.RegisterEvent, nf, ev) end
+	nf:SetScript("OnEvent", function(_, ev, unit) pcall(L.noteNearby, ev == "UPDATE_MOUSEOVER_UNIT" and "mouseover" or unit) end)
+end
+
