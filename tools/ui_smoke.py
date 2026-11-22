@@ -1049,5 +1049,37 @@ OpenGroup.scan.inFlight = nil
 assert(#Ff.results == 0, "new levels: a new list")
 Ff.clear()
 print("find several ok")
+-- matches while listed: once per person, one popup per 15 seconds, several at once batched, not in combat
+local Bm = OpenGroup_UI.browse
+local pops = {}
+local saveShow = OpenGroup_Alert.show
+OpenGroup_Alert.show = function(o) pops[#pops + 1] = o end
+GetNumGroupMembers = function() return 0 end
+OpenGroup.listings, OpenGroup.nearby, OpenGroup.remote = {}, {}, {}
+OpenGroup.mine = { leader = "Ann A", seq = 1, cat = 2, acts = {30}, need = 4, title = "", note = "", size = 1 }
+Bm.resetMatches()
+CLOCK = CLOCK + 100
+OpenGroup.listings["Grp One"] = { leader = "Grp One", seq = 1, shard = 55, level = 58, size = 3, hops = 0, class = "WARRIOR", need = 4, cat = 2, acts = {30}, price = 0, quest = 0, title = "", note = "", got = CLOCK }
+OpenGroup.listings["Grp Heal"] = { leader = "Grp Heal", seq = 1, shard = 55, level = 58, size = 3, hops = 0, class = "WARRIOR", need = 2, cat = 2, acts = {30}, price = 0, quest = 0, title = "", note = "", got = CLOCK }
+OpenGroup.listings["Grp Other"] = { leader = "Grp Other", seq = 1, shard = 55, level = 58, size = 3, hops = 0, class = "WARRIOR", need = 4, cat = 2, acts = {31}, price = 0, quest = 0, title = "", note = "", got = CLOCK }
+assert(Bm.checkMatches() == 1 and #pops == 1 and pops[1].small:find("wants you", 1, true), "a group for my dungeon that needs my role: one popup")
+assert(Bm.checkMatches() == 0 and #pops == 1, "once per person")
+OpenGroup.nearby["Grp Two"] = { leader = "Grp Two", src = "finder", size = 2, need = 4, acts = {30}, got = CLOCK, level = 0, shard = 47, cat = 2 }
+OpenGroup.nearby["Grp Three"] = { leader = "Grp Three", src = "chat", size = 2, need = 0, acts = {30}, got = CLOCK, level = 0, shard = 47, cat = 2 }
+assert(Bm.checkMatches() == 0, "within 15 seconds: waits")
+CLOCK = CLOCK + 16
+InCombatLockdown = function() return true end
+assert(Bm.checkMatches() == 0, "in combat: waits")
+InCombatLockdown = function() return false end
+assert(Bm.checkMatches() == 2 and pops[2].small:find("2 new", 1, true), "then the two together")
+OpenGroupDB.matchAlerts = false
+OpenGroup.listings["Grp Four"] = { leader = "Grp Four", seq = 1, shard = 55, level = 58, size = 3, hops = 0, class = "MAGE", need = 4, cat = 2, acts = {30}, price = 0, quest = 0, title = "", note = "", got = CLOCK }
+CLOCK = CLOCK + 16
+assert(Bm.checkMatches() == 0, "the setting turns them off")
+OpenGroupDB.matchAlerts = nil
+OpenGroup_Alert.show = saveShow
+OpenGroup.mine = nil
+OpenGroup.listings, OpenGroup.nearby, OpenGroup.remote = {}, {}, {}
+print("match alerts ok")
 print("smoke OK")
 ''')

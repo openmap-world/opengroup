@@ -275,6 +275,7 @@ function browse.focus(name)
 	if not (L.listings[name] or L.nearby[name] or (L.remote and L.remote[name])) then return false end
 	selected = name
 	collapsed = {}
+	if not win:IsShown() then win:Show() end
 	showPage("browse")
 	L.onChange()
 	local b = browse.box
@@ -2654,6 +2655,10 @@ do
 			"The game's search only shows your own language unless asked for more. Pick single languages in Browse's Filter menu." },
 		{ "Ask about new quests", function() return on("questPrompt") end, set("questPrompt"),
 			"When you accept a quest people group for (elite, group or dungeon quests, or ones with something to kill), Browse offers to list you for it or show the groups for it. The list doesn't change until you ask." },
+		{ "Alert me about matches while listed", function() return on("matchAlerts") end, set("matchAlerts"),
+			"While you're listed, a popup tells you when someone turns up for the same thing who fits: players with a role your group needs, or groups that need a role you play. From OpenGroup, LFG chat and the Group Finder." },
+		{ "Play a sound with alerts", function() return on("matchSound") end, set("matchSound"),
+			"The match popup plays the game's alert sound." },
 		{ "Show Browse as cards", function() return browse.cardsOn and browse.cardsOn() end, function(v) if browse.setCards then browse.setCards(v) end end,
 			"Two groups per line, with each slot spelled out (Tank, need heal, open) and Ask to join and Whisper on the card. The Cards / Rows button next to Filter switches too." },
 	}
@@ -4556,6 +4561,78 @@ end)()
 	end
 	browse.activityPicker = panel
 	browse.pickerPaint = function(id, on) setOne(id, on) end
+end)()
+
+-- --------------------------------------------------------------------------------------------
+-- Matches while you're listed: a popup when someone turns up for the same thing who fits. A group
+-- leader hears about players who play a role the group still needs; a solo player about groups
+-- that need a role they play (or don't say). Every source counts: OpenGroup listings and chat
+-- posts arrive as they happen, the game's Group Finder ones when anyone runs a search. Each
+-- person is announced once per listing, at most one popup every 15 seconds (several at once:
+-- "3 new for Blackrock Depths"), none in combat (they wait until after).
+
+;(function()
+	local seen, queue, lastAt = {}, {}, -1000
+	local GAP = 15
+	local function where(l)
+		if l.src == "finder" or l.src == "remote" then return "Group Finder" end
+		if l.src == "chat" or l.src == "remotechat" then return "LFG chat" end
+		return "OpenGroup"
+	end
+	-- does this listing want us, or bring what we want?
+	function browse.wantsUs(l)
+		if not matchesMine(l) then return false end
+		return (l.need or 0) == 0 or roleFit(l)
+	end
+	function browse.checkMatches()
+		local m = L.mine
+		if not m or db().matchAlerts == false then return 0 end
+		local title = L.titleOf(m)
+		for _, src in ipairs({ L.listings, L.nearby, L.remote or {} }) do
+			for name, l in pairs(src) do
+				local key = L.short(name) .. "|" .. title
+				if not seen[key] and not (L.ignored and L.ignored(name)) and browse.wantsUs(l) then
+					seen[key] = true
+					queue[#queue + 1] = l
+				end
+			end
+		end
+		return browse.flushMatches()
+	end
+	function browse.flushMatches()
+		if #queue == 0 or not L.mine then return 0 end
+		if InCombatLockdown and InCombatLockdown() then return 0 end
+		local t = GetTime()
+		if t - lastAt < GAP then return 0 end
+		lastAt = t
+		local list = queue
+		queue = {}
+		local title = L.titleOf(L.mine)
+		local leaderCase = iAmLeader()
+		local sound = db().matchSound ~= false
+		local l = list[1]
+		local who = W.classColor(l.class) .. L.short(l.leader) .. "|r"
+		local small
+		if #list > 1 then
+			small = ("%d new for %s"):format(#list, title)
+		elseif leaderCase then
+			small = ((l.need or 0) > 0 and roleNames(l.need) or "A player") .. " for " .. title .. " (" .. where(l) .. ")"
+		else
+			small = "A group for " .. title .. " wants you (" .. where(l) .. ")"
+		end
+		OpenGroup_Alert.show({
+			head = "OpenGroup", small = small, name = #list > 1 and (who .. " and " .. (#list - 1) .. " more") or who,
+			roles = (l.need or 0) > 0 and l.need or nil, class = l.class, icon = L.ICON,
+			quiet = not sound,
+			onClick = function() if browse.focus then browse.focus(l.leader) end end,
+		})
+		L.print(("%s %s: %s. Click the popup or open Browse to %s."):format(#list > 1 and (#list .. " new") or "new", leaderCase and "players" or "group",
+			#list > 1 and (L.short(l.leader) .. " and " .. (#list - 1) .. " more") or L.short(l.leader), leaderCase and "invite" or "ask to join"))
+		if OpenGroup_Minimap and OpenGroup_Minimap.flash then OpenGroup_Minimap.flash() end
+		return #list
+	end
+	function browse.resetMatches() seen, queue, lastAt = {}, {}, -1000 end
+	if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(3, function() pcall(browse.checkMatches) end) end
 end)()
 
 local sideTabs = {}
