@@ -2,17 +2,20 @@
 
 <img src="art/icon.png" width="128" alt="OpenGroup icon">
 
-A group finder addon for WoW Forever that shows groups from every shard, not just yours. It's made by the creator of [OpenMap](https://github.com/openmap-world/openmap).
+A group finder addon for WoW Forever that shows groups from every chat number, not just yours. It's made by the creator of [OpenMap](https://github.com/openmap-world/openmap).
 
-In Forever the Group Finder, Trade and LookingForGroup only show players on your own shard. OpenGroup users share their listings with each other through addon messages, so you can find and join groups on other shards too.
+In Forever, Trade and LookingForGroup chat are split by the number after the channel name (Trade - City 47, shown in OpenGroup as Chat 47), and the Group Finder only shows the players on your hidden server. OpenGroup users share their listings, their Group Finder and the useful Trade and LFG lines with each other through addon messages, so you can find and join groups everywhere.
 
 OpenGroup is free and always will be. If you'd like to support it, you can buy me a coffee on [Ko-fi](https://ko-fi.com/jigrobbulus).
 
 ## Features
 
-- Browse groups and players from all shards, starting with your level, in columns you can sort, grouped by activity
-- Search and filter by name, activity, category, shard or level
-- See the game's Group Finder groups and LookingForGroup chat posts from every shard where an OpenGroup player is
+- Browse groups and players from every chat number, starting with your level, in columns you can sort, grouped by activity
+- Search and filter by name, activity (short names like scholo or ubrs work), category, chat number or level
+- See the game's Group Finder groups and LookingForGroup chat posts from every chat number where an OpenGroup player is, with each group's members and the roles it still needs
+- World chat: Trade ads, crafters and group posts from every chat number, searchable for 3 hours
+- Find players: a /who for the classes and levels you need, with one-click whispers
+- A popup while you're listed when someone turns up who fits
 - List your group, or yourself, for a dungeon, zone, quest or anything else, with a short note
 - Set each open spot's role, class and level, and auto invite people who fit
 - Your party sees your group's listing in their OpenGroup too
@@ -25,15 +28,15 @@ OpenGroup is free and always will be. If you'd like to support it, you can buy m
 
 ## How it works
 
-OpenGroup talks to other players who have it installed using hidden addon whispers, which work across shards. It finds them through your friends list, guild, party, whispers, `/who` and LFG chat, and every user it finds tells it about a few more.
+OpenGroup talks to other players who have it installed using hidden addon whispers, which work across chat numbers and servers. It finds them through your friends list, guild, party, whispers, `/who` and LFG chat, and every user it finds tells it about a few more.
 
-Each shard's Group Finder groups are passed on too: one OpenGroup player per shard sends what their Group Finder shows to OpenGroup players on other shards every 90 seconds (the group leader's name, activity, size and the roles it needs).
+Each server's Group Finder groups are passed on too: one OpenGroup player per server sends what their Group Finder shows to OpenGroup players elsewhere every 90 seconds (the group leader's name, activity, size and the roles it needs).
 
-Listings are re-sent every 90 seconds and expire 5 minutes after the last update. Other users can see your character name, level, class, shard, what you listed for, your roles and your note.
+Listings are re-sent every 90 seconds and expire 5 minutes after the last update. Other users can see your character name, level, class, chat number, what you listed for, your roles and your note.
 
 Nothing is posted in public chat unless you leave "Post in LFG chat" ticked.
 
-Recent LookingForGroup posts from your shard (the poster's name, the post and its age) are passed on to OpenGroup players on other shards, who are on the same realm and faction. Untick "Share LFG chat from my shard" on the Network tab to stop that.
+Useful LookingForGroup and Trade lines from your chat number (the poster's name and class, the line and its age) are passed on to OpenGroup players elsewhere, who are on the same realm and faction. Untick "Share LFG chat from my chat number" or "Share Trade chat from my chat number" in Settings to stop that.
 
 ## Reporting a problem
 

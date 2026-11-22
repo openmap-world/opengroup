@@ -48,7 +48,7 @@ check("hello carries version", select(2, P.parse(P.hello(1, 2))).version == P.VE
 check("old hello still parses", select(2, P.parse("H1;47;55")).version == "")
 -- a test build shows the last released version to others (what 0.6.2 compares), its own after it
 local hf = {} for x in (P.hello(47, 60) .. ";"):gmatch("([^;]*);") do hf[#hf + 1] = x end
-check("test build: others see the released version", P.isPrerelease(P.VERSION) and hf[4] == P.RELEASED and hf[5] == P.VERSION)
+check("others see the released version", hf[4] == (P.isPrerelease(P.VERSION) and P.RELEASED or P.VERSION) and hf[5] == P.VERSION)
 check("test build: 0.6.3 reads the real one", select(2, P.parse(P.hello(47, 60))).version == P.VERSION)
 check("released versions aren't prereleases", not P.isPrerelease("0.6.2-beta") and not P.isPrerelease("0.7.0") and P.isPrerelease("0.6.3-test") and P.isPrerelease("1.0.0-dev"))
 check("version number", P.versionNumber("0.6.0-test") == 600 and P.versionNumber("1.2.10") == 10210 and P.versionNumber("x") == nil)

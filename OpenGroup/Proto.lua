@@ -93,11 +93,11 @@ local function split(s)
 	return out
 end
 
-P.VERSION = "0.6.3-test"
+P.VERSION = "0.6.3-beta"
 -- The last released version. A build that isn't released (-test, -dev, -alpha) shows this one to
 -- other players, so their OpenGroup never says a version is out that isn't; its own version
 -- travels in an extra field that older versions don't read. Update it with each release.
-P.RELEASED = "0.6.2-beta"
+P.RELEASED = "0.6.3-beta"
 function P.isPrerelease(v) return type(v) ~= "string" or v:find("%-test") ~= nil or v:find("%-dev") ~= nil or v:find("%-alpha") ~= nil end
 P.WIRE_VERSION = P.isPrerelease(P.VERSION) and P.RELEASED or P.VERSION
 P.MAX_PX = 10           -- names per peer-exchange message
