@@ -313,20 +313,8 @@ function browse.buildFilter(root)
 	local a = section("Activity")
 	if a ~= root and a.SetScrollMode then pcall(a.SetScrollMode, a, 420) end
 	local lvl = UnitLevel("player")
-	-- quick picks: several at once
-	local function pickAll(test)
-		filterActs = {}
-		for _, cat in ipairs(A.load()) do for _, id in ipairs(cat.acts) do if test(cat, id) then filterActs[id] = true end end end
-		L.onChange()
-	end
-	if a.CreateButton then
-		a:CreateButton(GOLD .. "Pick several (press and drag)...|r", function() if browse.openActivityPicker then browse.openActivityPicker() end end)
-		a:CreateButton("Suggested for my level", function() pickAll(function(_, id) local i = A.get(id) return i and (i.min or 0) > 0 and lvl >= i.min - 3 and lvl <= (i.max or 60) + 3 end) end)
-		a:CreateButton("All dungeons", function() pickAll(function(cat) return W.kindOf(cat.name) == "dungeon" end) end)
-		a:CreateButton("All raids", function() pickAll(function(cat) return W.kindOf(cat.name) == "raid" end) end)
-		a:CreateButton("Clear", function() filterActs = {} L.onChange() end)
-		if a.CreateDivider then a:CreateDivider() end
-	end
+	-- (buttons inside this scrolling submenu drew on top of each other on Forever: the quick picks
+	-- live in the activity picker, opened by its own entry below the submenu)
 	for _, cat in ipairs(A.load()) do
 		if (not filterCat or cat.id == filterCat) and #cat.acts > 0 then
 			if not filterCat and a.CreateTitle then a:CreateTitle(cat.name) end
@@ -335,6 +323,9 @@ function browse.buildFilter(root)
 					function() filterActs[id] = (not filterActs[id]) or nil L.onChange() end)
 			end
 		end
+	end
+	if root.CreateButton then
+		root:CreateButton("Pick activities (press and drag)...", function() if browse.openActivityPicker then browse.openActivityPicker() end end)
 	end
 	local sk = section("Show")
 	for _, o in ipairs({ { nil, "Groups and players" }, { "groups", "Groups only" }, { "players", "Players looking for a group" } }) do
@@ -984,8 +975,13 @@ local function fillRow(row, d)
 		if sl then
 			t:SetTexCoord(0, 1, 0, 1) t:SetDesaturated(false) t:SetVertexColor(1, 1, 1) t:SetAlpha(1)
 			if sl.kind == "member" then
-				if not (sl.class and W.setClassIcon(t, sl.class)) then t:SetTexture(QUESTION_ICON) end
-				t:SetAlpha(0.6)
+				if sl.class and W.setClassIcon(t, sl.class) then
+					t:SetAlpha(0.6)
+				else
+					-- a member whose class we don't know (the leader of a passed-on group): the dim round "?"
+					t:SetTexture(DISC) t:SetVertexColor(0.45, 0.42, 0.38) t:SetAlpha(0.3)
+					plus:SetText("?") plus:SetTextColor(0.7, 0.7, 0.7) plus:ClearAllPoints() plus:SetPoint("CENTER", t, "CENTER", 0, 0) plus:Show()
+				end
 				if (sl.role or 0) > 0 and W.ROLE_ATLAS[sl.role] then badge:SetAtlas(W.ROLE_ATLAS[sl.role]) badge:Show() end
 			elseif sl.kind == "unknown" then
 				-- someone we don't know yet: a dim round slot with a faint grey "?"
@@ -4331,7 +4327,7 @@ end)()
 			if sl then
 				t:SetTexCoord(0, 1, 0, 1) t:SetDesaturated(false) t:SetVertexColor(1, 1, 1) t:SetAlpha(1)
 				if sl.kind == "member" then
-					if not (sl.class and W.setClassIcon(t, sl.class)) then t:SetTexture(QUESTION_ICON) end
+					if not (sl.class and W.setClassIcon(t, sl.class)) then t:SetTexture(DISC) t:SetVertexColor(0.45, 0.42, 0.38) t:SetAlpha(0.3) end
 					if (sl.role or 0) > 0 and W.ROLE_ATLAS[sl.role] then b:SetAtlas(W.ROLE_ATLAS[sl.role]) b:Show() end
 					w:SetText(ROLE_WORD[sl.role or 0] or (sl.class and W.className(sl.class)) or "")
 				elseif sl.kind == "unknown" then

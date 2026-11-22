@@ -1081,5 +1081,24 @@ OpenGroup_Alert.show = saveShow
 OpenGroup.mine = nil
 OpenGroup.listings, OpenGroup.nearby, OpenGroup.remote = {}, {}, {}
 print("match alerts ok")
+-- the Filter menu: the Activity submenu holds only checkboxes and titles; the picker has its own entry
+do
+  local made = { buttons = {}, inSub = {} }
+  local function node(isSub)
+    local n = {}
+    function n:CreateButton(text, fn) made.buttons[#made.buttons + 1] = { text = text, sub = isSub } return node(true) end
+    function n:CreateRadio() end function n:CreateCheckbox() end function n:CreateTitle() end function n:CreateDivider() end
+    function n:SetScrollMode() end
+    return n
+  end
+  OpenGroup_UI.browse.buildFilter(node(false))
+  local picker, stray = false, false
+  for _, b in ipairs(made.buttons) do
+    if b.text:find("Pick activities", 1, true) and not b.sub then picker = true end
+    if b.sub then stray = true end
+  end
+  assert(picker and not stray, "no buttons inside submenus; Pick activities at the top level")
+end
+print("filter menu ok")
 print("smoke OK")
 ''')
